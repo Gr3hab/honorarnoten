@@ -87,8 +87,9 @@
       <h2>Noch offen</h2>
       <ul class="liste" id="offene"></ul>
     </div>
-    <button class="gross" type="button" data-art="T">Therapie-Honorarnote<small>mit Terminen, auch Begutachtung</small></button>
-    <button class="gross" type="button" data-art="E">Erstgespräch<small>ein Termin</small></button>
+    <button class="gross" type="button" data-art="T" data-leistung="Therapie – 60 Minuten">Therapie – 60 Minuten</button>
+    <button class="gross" type="button" data-art="E">Erstgespräch</button>
+    <div id="weitere-leistungen"></div>
     <h2>Zuletzt geschickt</h2>
     <ul class="liste" id="letzte"><li>Wird geladen …</li></ul>
     <button class="link" type="button" id="btn-abmelden">Abmelden</button>
@@ -122,12 +123,14 @@
     <textarea id="f-diagnose" autocomplete="off"></textarea>
 
     <div data-nur="T">
-      <label class="pflicht">Leistung</label>
-      <div class="kacheln" id="f-leistung" role="group"></div>
+      <details id="f-leistung-auswahl">
+        <summary class="link">Leistung ändern</summary>
+        <div class="kacheln" id="f-leistung" role="group" aria-label="Leistung"></div>
+      </details>
 
-      <label for="f-termine" class="pflicht">Termine</label>
-      <div class="hilfe">Tag.Monat, mit Komma getrennt, z. B. 3.11, 10.11, 17.11</div>
-      <textarea id="f-termine" inputmode="decimal" autocomplete="off"></textarea>
+      <label for="f-termine" id="l-termine" class="pflicht">Termine</label>
+      <div class="hilfe" id="h-termine">Tag.Monat, mit Komma getrennt, z. B. 3.11, 10.11, 17.11</div>
+      <textarea id="f-termine" inputmode="decimal" autocomplete="off" aria-describedby="h-termine"></textarea>
       <button class="klein" type="button" id="btn-heute">+ heute dazu</button>
     </div>
 
@@ -158,7 +161,7 @@
     <div id="k-frage"></div>
     <div class="vergleich" id="k-zeilen"></div>
     <div class="unten">
-      <button class="gross gruen" type="button" id="btn-drucken">Stimmt – jetzt drucken</button>
+      <button class="gross gruen" type="button" id="btn-drucken">Stimmt – zweimal drucken</button>
       <button class="gross hell" type="button" id="btn-aendern">Etwas ändern</button>
     </div>
   </section>
@@ -274,6 +277,16 @@ async function ladeStart() {
     const r = await api('start', {});
     if (!r.ok) return meldung('start-meldung', r.fehler);
     start = r;
+    const weitere = $('weitere-leistungen');
+    weitere.replaceChildren();
+    const standard = document.querySelector('[data-leistung]').dataset.leistung;
+    r.leistungen.filter(leistung => leistung !== standard).forEach(leistung => {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'gross hell';
+      button.textContent = leistungsname(leistung);
+      button.onclick = () => oeffneFormular('T', leistung);
+      weitere.appendChild(button);
+    });
     const ul = $('letzte'); ul.textContent = '';
     (r.letzte.length ? r.letzte : [{ patient: 'Noch keine', nummer: '', datum: '', status: '' }]).forEach(x => {
       const li = document.createElement('li');
@@ -286,7 +299,7 @@ async function ladeStart() {
     zeigeOffene(true);
   } catch (e) { if (e.message !== 'abgemeldet') { meldung('start-meldung', KEIN_NETZ); zeigeOffene(false); } }
 }
-document.querySelectorAll('[data-art]').forEach(b => b.onclick = () => oeffneFormular(b.dataset.art));
+document.querySelectorAll('[data-art]').forEach(b => b.onclick = () => oeffneFormular(b.dataset.art, b.dataset.leistung));
 document.querySelectorAll('[data-zurueck]').forEach(b => b.onclick = () => ladeStart());
 
 // ---------- Formular ----------
@@ -295,12 +308,32 @@ const FELDER = { T: ['patient', 'versnr', 'adresse', 'diagnose', 'leistung', 'te
 let auswahl = { leistung: '', zahlung: '' };
 let nummerAutomatisch = true;
 
+function leistungsname(leistung) {
+  return leistung === 'T3 – 60 Minuten' ? 'Therapie T3 – 60 Minuten' : leistung;
+}
+
+function zeigeLeistung() {
+  const begutachtung = auswahl.leistung.startsWith('Begutachtung');
+  $('f-titel').textContent = art === 'E' ? 'Erstgespräch' : leistungsname(auswahl.leistung) || 'Therapie-Honorarnote';
+  $('l-termine').textContent = begutachtung ? 'Datum der Begutachtung' : 'Termine';
+  $('h-termine').textContent = begutachtung ? 'Tag.Monat, z. B. 3.11' : 'Tag.Monat, mit Komma getrennt, z. B. 3.11, 10.11, 17.11';
+  $('btn-heute').textContent = begutachtung ? 'Heutiges Datum einsetzen' : '+ heute dazu';
+}
+
 function kacheln(id, werte, feld) {
   const box = $(id); box.textContent = '';
   werte.forEach(w => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'kachel'; b.textContent = w;
     b.setAttribute('aria-pressed', String(auswahl[feld] === w));
-    b.onclick = () => { auswahl[feld] = w; kacheln(id, werte, feld); merkeEntwurf(); };
+    b.onclick = () => {
+      auswahl[feld] = w;
+      kacheln(id, werte, feld);
+      if (feld === 'leistung') {
+        zeigeLeistung();
+        $('f-leistung-auswahl').open = false;
+      }
+      merkeEntwurf();
+    };
     box.appendChild(b);
   });
 }
@@ -314,16 +347,16 @@ function merkeEntwurf() {
     speicher.set('entwurf_' + art, { ...werte(), nummerAutomatisch });
   }
 }
-function oeffneFormular(a) {
+function oeffneFormular(a, leistung) {
   if (!start) return ladeStart();
   art = a; antworten = {}; geprueft = null;
-  $('f-titel').textContent = a === 'T' ? 'Therapie-Honorarnote' : 'Erstgespräch';
   document.querySelectorAll('[data-nur]').forEach(el => el.hidden = el.dataset.nur !== a);
   $('l-diagnose').textContent = a === 'T' ? 'Logopädische Diagnose' : 'Logopädische Diagnose (falls schon bekannt)';
   $('l-diagnose').classList.toggle('pflicht', a === 'T');
   const zuletzt = speicher.get('zuletzt_' + a) || {};
   const entwurf = speicher.get('entwurf_' + a);
-  const basis = entwurf || { betrag: zuletzt.betrag || '', leistung: zuletzt.leistung || '', zahlung: zuletzt.zahlung || '' };
+  const betragVorschlag = leistung && leistung !== zuletzt.leistung ? '' : zuletzt.betrag || '';
+  const basis = entwurf || { betrag: betragVorschlag, leistung: zuletzt.leistung || '', zahlung: zuletzt.zahlung || '' };
   ['patient', 'versnr', 'adresse', 'diagnose', 'termine', 'termin', 'betrag', 'rechnungsdatum', 'nummer'].forEach(k => { $('f-' + k).value = basis[k] || ''; });
   // Mit Jahreszahl vorbelegt: dann ist das Jahr nie zweifelhaft.
   if (!$('f-rechnungsdatum').value) $('f-rechnungsdatum').value = start.heute;
@@ -332,7 +365,9 @@ function oeffneFormular(a) {
   const vorschlag = String(start.vorschlag.nummer);
   nummerAutomatisch = !nummer.value || (entwurf?.nummerAutomatisch ?? (nummer.value === vorschlag));
   if (nummerAutomatisch) nummer.value = vorschlag;
-  auswahl = { leistung: basis.leistung || '', zahlung: basis.zahlung || '' };
+  auswahl = { leistung: leistung || basis.leistung || '', zahlung: basis.zahlung || '' };
+  $('f-leistung-auswahl').open = !auswahl.leistung;
+  zeigeLeistung();
   kacheln('f-leistung', start.leistungen, 'leistung');
   kacheln('f-zahlung', start.zahlungen, 'zahlung');
   meldung('f-meldung', entwurf ? 'Die Eingaben vom letzten Mal sind wieder da. Zum Neubeginnen ganz unten „Alles leeren“ tippen.' : '', 'hinweis');
@@ -342,11 +377,12 @@ $('f-nummer').addEventListener('input', () => { nummerAutomatisch = !$('f-nummer
 document.querySelectorAll('#s-formular input, #s-formular textarea').forEach(el => el.addEventListener('input', merkeEntwurf));
 $('btn-heute').onclick = () => {
   const t = $('f-termine'); const h = start.heute.slice(0, 5).replace(/^0/, '').replace('.0', '.');
-  t.value = t.value.trim() ? t.value.trim().replace(/,\s*$/, '') + ', ' + h : h; merkeEntwurf();
+  t.value = t.value.trim() && !auswahl.leistung.startsWith('Begutachtung') ? t.value.trim().replace(/,\s*$/, '') + ', ' + h : h;
+  merkeEntwurf();
 };
 $('btn-leeren').onclick = () => {
   if (!confirm('Alle Eingaben löschen?')) return;
-  speicher.weg('entwurf_' + art); oeffneFormular(art); meldung('f-meldung', '');
+  speicher.weg('entwurf_' + art); oeffneFormular(art, auswahl.leistung); meldung('f-meldung', '');
 };
 
 $('btn-weiter').onclick = () => pruefen();
@@ -528,7 +564,7 @@ async function senden() {
       offenWeg(offen.anfrageId);
       if (r.frage) { geprueft.antwort.frage = r.frage; antworten = {}; zeigeKontrolle(); }
       else if (r.nichtGespeichert) {
-        // V11.10: zurück zur Kontrolle; erneutes „Stimmt – jetzt drucken“ sendet DIESELBE Anfrage-ID.
+        // V11.10: zurück zur Kontrolle; erneutes „Stimmt – zweimal drucken“ sendet DIESELBE Anfrage-ID.
         zeigeKontrolle();
         const d = document.createElement('div'); d.className = 'box fehler'; d.textContent = r.fehler;
         $('k-hinweise').prepend(d);
@@ -601,7 +637,8 @@ function demoApi(aktion, d) {
   const datum = s => { const m = /^\s*(\d{1,2})\.(\d{1,2})\.?(\d{4})?\s*$/.exec(s); if (!m) return null; return [Number(m[1]), Number(m[2]), Number(m[3] || heute.getFullYear())]; };
   return warte(aktion === 'senden' ? 1800 : 500).then(() => {
     if (aktion === 'start') return { ok: true, heute: heuteText, vorschlag: { jahr: heute.getFullYear(), nummer: 39 },
-      leistungen: ['T3 – 60 Minuten', 'Therapie – 60 Minuten', 'Hausbesuch – 60 Minuten', 'Begutachtung + Elternberatung'],
+      leistungen: ['T3 – 60 Minuten', 'Therapie – 60 Minuten', 'Therapie – 45 Minuten', 'Hausbesuch – 60 Minuten',
+        'Hausbesuch T3 – 60 Minuten', 'Begutachtung + Elternberatung', 'Begutachtung T3 + Elternberatung'],
       zahlungen: ['Bar erhalten', 'Offen (Überweisung)'], ansprechperson: 'Christian',
       letzte: [{ datum: '17.11.', nummer: '2026/38', patient: 'MUSTER Max (Beispiel)', status: 'an Drucker geschickt' }] };
     if (aktion === 'pruefen' || aktion === 'senden') {
