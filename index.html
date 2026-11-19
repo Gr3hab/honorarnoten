@@ -142,8 +142,8 @@
     <input id="f-rechnungsdatum" inputmode="decimal" autocomplete="off">
 
     <label for="f-nummer" class="pflicht">Rechnungsnummer</label>
-    <div class="hilfe" id="h-nummer">die nächste freie Nummer ist schon eingetragen</div>
-    <input id="f-nummer" inputmode="numeric" autocomplete="off">
+    <div class="hilfe" id="h-nummer">Die nächste Nummer steht schon drin. Zum Ändern einfach antippen.</div>
+    <input id="f-nummer" inputmode="numeric" autocomplete="off" aria-describedby="h-nummer">
 
     <button class="link" type="button" id="btn-leeren">Alles leeren und neu beginnen</button>
     <button class="link" type="button" data-zurueck="start">Zurück zur Auswahl</button>
@@ -186,7 +186,7 @@
 <script>
 'use strict';
 // ====== EINSTELLUNG: hier die Adresse der Apps-Script-Web-App eintragen (endet auf /exec) ======
-const API_URL = 'HIER_WEB_APP_URL_EINTRAGEN';
+const API_URL = 'https://script.google.com/macros/s/AKfycbymwMfIo_l81EyRcmdbGSgTdM5q3Tmf6Mw1a_EObtVlBhW-qxtCcsUUqCdHyFsc-Bj0/exec';
 // ===============================================================================================
 
 const $ = id => document.getElementById(id);
@@ -293,6 +293,7 @@ document.querySelectorAll('[data-zurueck]').forEach(b => b.onclick = () => ladeS
 const FELDER = { T: ['patient', 'versnr', 'adresse', 'diagnose', 'leistung', 'termine', 'betrag', 'zahlung', 'rechnungsdatum', 'nummer'],
                  E: ['patient', 'versnr', 'adresse', 'termin', 'diagnose', 'betrag', 'zahlung', 'rechnungsdatum', 'nummer'] };
 let auswahl = { leistung: '', zahlung: '' };
+let nummerAutomatisch = true;
 
 function kacheln(id, werte, feld) {
   const box = $(id); box.textContent = '';
@@ -308,7 +309,11 @@ function werte() {
   FELDER[art].forEach(k => { f[k] = (k === 'leistung' || k === 'zahlung') ? auswahl[k] : $('f-' + k).value.trim(); });
   return f;
 }
-function merkeEntwurf() { if ($('s-formular').classList.contains('aktiv')) speicher.set('entwurf_' + art, werte()); }
+function merkeEntwurf() {
+  if ($('s-formular').classList.contains('aktiv')) {
+    speicher.set('entwurf_' + art, { ...werte(), nummerAutomatisch });
+  }
+}
 function oeffneFormular(a) {
   if (!start) return ladeStart();
   art = a; antworten = {}; geprueft = null;
@@ -323,13 +328,17 @@ function oeffneFormular(a) {
   // Mit Jahreszahl vorbelegt: dann ist das Jahr nie zweifelhaft.
   if (!$('f-rechnungsdatum').value) $('f-rechnungsdatum').value = start.heute;
   if (a === 'E' && !$('f-termin').value) $('f-termin').value = start.heute;
-  if (!$('f-nummer').value || !entwurf) $('f-nummer').value = String(start.vorschlag.nummer);
+  const nummer = $('f-nummer');
+  const vorschlag = String(start.vorschlag.nummer);
+  nummerAutomatisch = !nummer.value || (entwurf?.nummerAutomatisch ?? (nummer.value === vorschlag));
+  if (nummerAutomatisch) nummer.value = vorschlag;
   auswahl = { leistung: basis.leistung || '', zahlung: basis.zahlung || '' };
   kacheln('f-leistung', start.leistungen, 'leistung');
   kacheln('f-zahlung', start.zahlungen, 'zahlung');
   meldung('f-meldung', entwurf ? 'Die Eingaben vom letzten Mal sind wieder da. Zum Neubeginnen ganz unten „Alles leeren“ tippen.' : '', 'hinweis');
   zeige('formular');
 }
+$('f-nummer').addEventListener('input', () => { nummerAutomatisch = !$('f-nummer').value.trim(); });
 document.querySelectorAll('#s-formular input, #s-formular textarea').forEach(el => el.addEventListener('input', merkeEntwurf));
 $('btn-heute').onclick = () => {
   const t = $('f-termine'); const h = start.heute.slice(0, 5).replace(/^0/, '').replace('.0', '.');
@@ -355,10 +364,9 @@ async function pruefen() {
   if (!f.zahlung) fehlt.push('Zahlung');
   if (!f.rechnungsdatum) fehlt.push('Rechnungsdatum');
   if (fehlt.length) return meldung('f-meldung', 'Bitte noch ausfüllen: ' + fehlt.join(', ') + '.');
-  const vorgeschlagen = start && f.nummer === String(start.vorschlag.nummer);
   $('btn-weiter').disabled = true; $('btn-weiter').textContent = 'Wird geprüft …';
   try {
-    const r = await api('pruefen', { art, felder: f, nummerVorgeschlagen: vorgeschlagen });
+    const r = await api('pruefen', { art, felder: f, nummerVorgeschlagen: nummerAutomatisch });
     if (!r.ok) {
       zeige('formular');
       meldung('f-meldung', r.fehler + (r.vorschlag ? ` Die nächste freie Nummer ist ${r.vorschlag}.` : ''));
@@ -373,8 +381,13 @@ async function pruefen() {
 }
 function nummerKnopf(n) {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'gross hell'; b.textContent = `Nummer ${n} nehmen`;
-  b.onclick = () => { $('f-nummer').value = String(n); merkeEntwurf(); pruefen(); };
+  b.onclick = () => { nummerUebernehmen(n); pruefen(); };
   $('f-meldung').appendChild(b);
+}
+function nummerUebernehmen(n) {
+  $('f-nummer').value = String(n);
+  nummerAutomatisch = false;
+  merkeEntwurf();
 }
 
 // ---------- Kontrolle ----------
@@ -393,7 +406,7 @@ function zeigeKontrolle() {
     const box = document.createElement('div'); box.className = 'box hinweis';
     const p = document.createElement('p'); p.style.marginTop = '0'; p.textContent = r.frage.text; box.appendChild(p);
     const nein = document.createElement('button'); nein.type = 'button'; nein.className = 'gross'; nein.textContent = r.frage.nein;
-    nein.onclick = () => { $('f-nummer').value = String(r.frage.vorschlag); merkeEntwurf(); zeige('formular'); pruefen(); };
+    nein.onclick = () => { zeige('formular'); nummerUebernehmen(r.frage.vorschlag); pruefen(); };
     const ja = document.createElement('button'); ja.type = 'button'; ja.className = 'gross hell'; ja.textContent = r.frage.ja;
     ja.onclick = () => { antworten.luecke = 'von_hand'; zeigeKontrolle(); };
     box.appendChild(nein); box.appendChild(ja); q.appendChild(box);
