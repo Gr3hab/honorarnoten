@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Verbindungstest</title>
+<style>
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size:19px; line-height:1.4; background:#f3f6f8; color:#111; }
+  header { background:#1f5f8b; color:#fff; padding:14px 18px; font-size:21px; font-weight:700; }
+  main { max-width:640px; margin:0 auto; padding:16px; }
+  label { display:block; font-weight:700; margin:12px 0 6px; }
+  input { width:100%; box-sizing:border-box; font-size:17px; padding:12px; border:2px solid #b9c4cc; border-radius:10px; }
+  button { display:block; width:100%; min-height:56px; font:inherit; font-weight:700; border:none; border-radius:12px; margin:12px 0; color:#fff; background:#1f5f8b; }
+  button:disabled { opacity:.5; }
+  .zeile { background:#fff; border:2px solid #dbe2e7; border-radius:10px; padding:10px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-word; font-size:16px; }
+  .ok { border-color:#1e7b34; background:#e5f4e8; } .fehler { border-color:#a32020; background:#fde8e8; }
+  #gesamt { font-size:22px; font-weight:700; }
+  small { color:#5a5a5a; }
+</style>
+</head>
+<body>
+<header>Verbindungstest (nur Test, keine Daten)</header>
+<main>
+  <p>Diese Seite prüft, ob dieses Gerät die Google-Web-App so erreicht, wie es die Honorarnoten-Seite braucht. Es wird nichts gespeichert, erstellt oder gedruckt.</p>
+  <label for="url">Adresse der Test-Web-App (endet auf /exec)</label>
+  <input id="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/macros/s/…/exec">
+  <button id="los" type="button">Alle 4 Tests starten (dauert etwa 40 Sekunden)</button>
+  <div id="gesamt"></div>
+  <div id="liste"></div>
+  <button id="kopieren" type="button" hidden>Ergebnis kopieren (zum Weiterschicken)</button>
+  <p><small>Die Adresse wird nur auf diesem Gerät gemerkt, damit man sie nicht zweimal eintippen muss. Sie ist kein Geheimnis: Die Test-Web-App kann nichts lesen oder ändern.</small></p>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+try { $('url').value = localStorage.getItem('vt_url') || ''; } catch (e) {}
+const UMLAUTE = 'Größe – Jänner – 1.234,50 € – ÄÖÜ äöü ß';
+// Genau dieselben fetch-Einstellungen wie die echte Honorarnoten-Seite (index.html, Funktion api).
+async function senden(url, daten) {
+  const t0 = performance.now();
+  const r = await fetch(url, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(daten) });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  let ziel = ''; try { ziel = new URL(r.url).host; } catch (e) {}
+  return { j, ms: Math.round(performance.now() - t0), ziel, weitergeleitet: r.redirected };
+}
+const TESTS = [
+  { name: '1 Kurzer Auftrag', daten: () => ({ echo: 'kurz-' + Date.now() }), pruefe: (a, d) => a.j.echo === d.echo },
+  { name: '2 Umlaute hin und zurück', daten: () => ({ echo: 'umlaute', umlaute: UMLAUTE }), pruefe: a => a.j.umlauteZurueck === UMLAUTE && a.j.umlauteVomServer === 'äöüß – € Jänner' },
+  { name: '3 Großer Auftrag (15 000 Zeichen)', daten: () => ({ echo: 'gross', fuell: 'x'.repeat(15000) }), pruefe: a => a.j.echo === 'gross' && a.j.zeichen > 15000 },
+  { name: '4 Langsame Antwort (25 Sekunden, wie eine echte Honorarnote)', daten: () => ({ echo: 'langsam', warteSek: 25 }), pruefe: a => a.j.echo === 'langsam' && a.j.gewartetSek === 25 }
+];
+let bericht = [];
+$('los').onclick = async () => {
+  const url = $('url').value.trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url)) { $('gesamt').textContent = 'Bitte die vollständige Adresse eintragen (beginnt mit https://script.google.com/macros/s/ und endet auf /exec).'; return; }
+  try { localStorage.setItem('vt_url', url); } catch (e) {}
+  $('los').disabled = true; $('liste').textContent = ''; $('gesamt').textContent = 'Läuft …'; $('kopieren').hidden = true;
+  bericht = ['Verbindungstest ' + new Date().toLocaleString('de-AT'), 'Seite: ' + location.origin + location.pathname, 'Gerät: ' + navigator.userAgent];
+  let gut = 0;
+  for (const t of TESTS) {
+    const div = document.createElement('div'); div.className = 'zeile'; div.textContent = t.name + ': läuft …'; $('liste').appendChild(div);
+    const d = t.daten();
+    try {
+      const a = await senden(url, d);
+      const ok = a.j && a.j.ok === true && t.pruefe(a, d);
+      if (ok) gut++;
+      div.className = 'zeile ' + (ok ? 'ok' : 'fehler');
+      div.textContent = `${ok ? '✓' : '✗'} ${t.name}\n${a.ms} ms, Ziel ${a.ziel || '?'}${a.weitergeleitet ? ' (weitergeleitet)' : ''}, Typ beim Server: ${a.j.typ}` + (ok ? '' : '\nAntwort: ' + JSON.stringify(a.j).slice(0, 200));
+    } catch (e) {
+      div.className = 'zeile fehler';
+      div.textContent = `✗ ${t.name}\nFehler: ${e && e.name}: ${e && e.message}` + (/fetch|load|network/i.test(String(e && e.message)) ? '\n(Typisch für eine blockierte Verbindung (CORS) oder fehlendes Internet.)' : '');
+    }
+    bericht.push(div.textContent.replace(/\n/g, ' | '));
+  }
+  const alle = gut === TESTS.length;
+  $('gesamt').textContent = alle ? '✓ BESTANDEN: alle 4 Tests gut.' : `✗ NICHT BESTANDEN: ${gut} von ${TESTS.length} gut.`;
+  $('gesamt').style.color = alle ? '#1e7b34' : '#a32020';
+  bericht.splice(3, 0, 'Gesamt: ' + $('gesamt').textContent);
+  $('los').disabled = false; $('kopieren').hidden = false;
+};
+$('kopieren').onclick = async () => {
+  const t = bericht.join('\n');
+  try { await navigator.clipboard.writeText(t); $('kopieren').textContent = 'Kopiert ✓'; }
+  catch (e) { prompt('Bitte markieren und kopieren:', t); }
+};
+</script>
+</body>
+</html>
