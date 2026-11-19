@@ -23,7 +23,7 @@
   h2 { font-size:22px; margin:24px 0 8px; }
   label { display:block; font-weight:700; margin:20px 0 6px; }
   .hilfe { font-size:17px; color:var(--grau); margin:-2px 0 8px; }
-  input, textarea { width:100%; font-size:22px; padding:14px; border:2px solid var(--rand); border-radius:10px; background:#fff; color:#111; }
+  input, textarea, select { width:100%; font-size:22px; padding:14px; border:2px solid var(--rand); border-radius:10px; background:#fff; color:#111; }
   textarea { min-height:96px; resize:vertical; }
   input:focus, textarea:focus { outline:none; border-color:var(--blau); box-shadow:0 0 0 3px rgba(31,95,139,.25); }
   button { font:inherit; cursor:pointer; }
@@ -90,6 +90,11 @@
     <button class="gross" type="button" data-art="T" data-leistung="Therapie – 60 Minuten">Therapie – 60 Minuten</button>
     <button class="gross" type="button" data-art="E">Erstgespräch</button>
     <div id="weitere-leistungen"></div>
+    <details id="weitere-dokumente" hidden>
+      <summary class="link">Weitere Dokumente</summary>
+      <div id="dokument-auswahl"></div>
+      <button class="gross hell" type="button" id="dokument-offen" hidden>Druckstatus prüfen</button>
+    </details>
     <h2>Zuletzt geschickt</h2>
     <ul class="liste" id="letzte"><li>Wird geladen …</li></ul>
     <button class="link" type="button" id="btn-abmelden">Abmelden</button>
@@ -151,6 +156,26 @@
     <button class="link" type="button" id="btn-leeren">Alles leeren und neu beginnen</button>
     <button class="link" type="button" data-zurueck="start">Zurück zur Auswahl</button>
     <div class="unten"><button class="gross" type="button" id="btn-weiter">Weiter – kontrollieren</button></div>
+  </section>
+
+  <section id="s-dokument">
+    <h1 id="dokument-titel"></h1>
+    <div id="dokument-meldung" role="status"></div>
+    <form id="dokument-formular">
+      <div id="dokument-felder"></div>
+      <div class="unten"><button class="gross" type="submit">Weiter – kontrollieren</button></div>
+    </form>
+    <button class="link" type="button" data-zurueck="start">Zurück zur Auswahl</button>
+  </section>
+
+  <section id="s-dokument-kontrolle">
+    <h1 id="dokument-kontrolltitel">Bitte vergleichen</h1>
+    <div class="vergleich" id="dokument-kontrollzeilen"></div>
+    <div id="dokument-ergebnis" role="status"></div>
+    <button class="gross gruen" type="button" id="dokument-drucken">Stimmt – zweimal drucken</button>
+    <button class="gross hell" type="button" id="dokument-aendern">Etwas ändern</button>
+    <button class="gross hell" type="button" id="dokument-status" hidden>Druckstatus prüfen</button>
+    <button class="link" type="button" data-zurueck="start">Zurück zur Auswahl</button>
   </section>
 
   <!-- KONTROLLE -->
@@ -277,6 +302,8 @@ async function ladeStart() {
     const r = await api('start', {});
     if (!r.ok) return meldung('start-meldung', r.fehler);
     start = r;
+    $('weitere-dokumente').hidden = !r.weitereDokumente;
+    $('dokument-offen').hidden = !offeneDokumente().length;
     const weitere = $('weitere-leistungen');
     weitere.replaceChildren();
     const standard = document.querySelector('[data-leistung]').dataset.leistung;
@@ -301,6 +328,141 @@ async function ladeStart() {
 }
 document.querySelectorAll('[data-art]').forEach(b => b.onclick = () => oeffneFormular(b.dataset.art, b.dataset.leistung));
 document.querySelectorAll('[data-zurueck]').forEach(b => b.onclick = () => ladeStart());
+
+// ---------- Weitere Dokumente ----------
+const DOKUMENTE = {
+  angebot: { titel: 'Kostenvoranschlag', felder: [['name', 'Für wen?'], ['anzahl', 'Anzahl der Therapieeinheiten', 'numeric'], ['minuten', 'Minuten pro Einheit', 'numeric', '60'], ['preis', 'Preis pro Einheit in Euro', 'decimal']] },
+  gutschein: { titel: 'Gutschein', felder: [['minuten', 'Dauer in Minuten', 'numeric', '45'], ['name', 'Für wen? (freiwillig)'], ['gueltig', 'Gültig bis (freiwillig)', 'date']] },
+  gutscheinrechnung: { titel: 'Gutscheinrechnung', felder: [['name', 'Name oder Firma'], ['adresse', 'Adresse'], ['anzahl', 'Anzahl der Gutscheine', 'numeric', '1'], ['preis', 'Preis pro Gutschein in Euro', 'decimal'], ['zahlung', 'Zahlung', 'zahlung'], ['nummer', 'Rechnungsnummer', 'numeric']] },
+  bewilligung: { titel: 'Schreiben zur Therapiebewilligung', felder: [['empfaenger', 'An wen geht das Schreiben?'], ['name', 'Name'], ['versnr', 'Versicherungsnummer', 'numeric'], ['anzahl', 'Anzahl der Therapieeinheiten', 'numeric'], ['begruendung', 'Begründung', 'textarea']] }
+};
+let dokumentEntwurf = null;
+let dokumentAnfrage = '';
+let dokumentSendet = false;
+
+function offeneDokumente() {
+  return (speicher.get('dokumentOffen') || []).filter(e => Date.now() - e.zeit < 30 * 86400000);
+}
+
+function dokumentAustragen(id) {
+  speicher.set('dokumentOffen', offeneDokumente().filter(e => e.id !== id));
+}
+
+Object.entries(DOKUMENTE).forEach(([art, { titel }]) => {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'gross hell'; button.textContent = titel;
+  button.onclick = () => oeffneDokument(art);
+  $('dokument-auswahl').appendChild(button);
+});
+
+function oeffneDokument(art) {
+  dokumentEntwurf = { art };
+  const { titel, felder } = DOKUMENTE[art];
+  $('dokument-titel').textContent = titel;
+  meldung('dokument-meldung', '');
+  const gruppe = $('dokument-felder');
+  gruppe.replaceChildren();
+  for (const [name, beschriftung, typ, vor] of felder) {
+    const label = document.createElement('label');
+    label.htmlFor = 'd-' + name;
+    label.textContent = beschriftung;
+    const eingabe = document.createElement(typ === 'textarea' ? 'textarea' : (typ === 'zahlung' ? 'select' : 'input'));
+    eingabe.id = label.htmlFor; eingabe.name = name;
+    eingabe.required = !beschriftung.endsWith('(freiwillig)');
+    if (typ === 'zahlung') {
+      for (const text of start.zahlungen) eingabe.add(new Option(text, text));
+      eingabe.selectedIndex = -1;
+    } else {
+      if (typ === 'date') eingabe.type = 'date';
+      if (typ === 'numeric' || typ === 'decimal') eingabe.inputMode = typ;
+      eingabe.value = name === 'nummer' ? String(start.vorschlag.nummer) : (vor || '');
+    }
+    gruppe.append(label, eingabe);
+  }
+  zeige('dokument');
+}
+
+$('dokument-formular').onsubmit = async e => {
+  e.preventDefault();
+  const art = dokumentEntwurf.art;
+  const felder = Object.fromEntries(new FormData(e.currentTarget));
+  const submit = e.currentTarget.querySelector('button');
+  submit.disabled = true;
+  try {
+    const r = await api('dokumentPruefen', { art, felder });
+    if (!r.ok) return meldung('dokument-meldung', r.fehler);
+    if (r.nummer) felder.nummer = r.nummer;
+    dokumentEntwurf = { art, felder };
+    dokumentAnfrage = neueId();
+    $('dokument-kontrolltitel').textContent = r.titel + ' prüfen';
+    const vergleich = $('dokument-kontrollzeilen');
+    vergleich.replaceChildren();
+    for (const [titel, text] of r.zeilen) {
+      const zeile = document.createElement('div'), label = document.createElement('b'), wert = document.createElement('span');
+      label.textContent = titel; wert.textContent = text;
+      zeile.append(label, wert); vergleich.appendChild(zeile);
+    }
+    $('dokument-drucken').hidden = false;
+    $('dokument-aendern').hidden = false;
+    $('dokument-status').hidden = true;
+    meldung('dokument-ergebnis', '');
+    zeige('dokument-kontrolle');
+  } catch (error) {
+    if (error.message !== 'abgemeldet') meldung('dokument-meldung', KEIN_NETZ);
+  } finally { submit.disabled = false; }
+};
+
+$('dokument-aendern').onclick = () => zeige('dokument');
+$('dokument-drucken').onclick = async () => {
+  if (dokumentSendet) return;
+  dokumentSendet = true;
+  $('dokument-drucken').hidden = true;
+  $('dokument-aendern').hidden = true;
+  const zurueck = $('s-dokument-kontrolle').querySelector('[data-zurueck]');
+  zurueck.disabled = true;
+  const pending = offeneDokumente().filter(e => e.id !== dokumentAnfrage);
+  speicher.set('dokumentOffen', [...pending, { id: dokumentAnfrage, zeit: Date.now() }]);
+  meldung('dokument-ergebnis', 'Wird erstellt und an den Drucker geschickt …', 'hinweis');
+  try {
+    const r = await api('dokumentSenden', { ...dokumentEntwurf, anfrageId: dokumentAnfrage });
+    if (!r.ok) {
+      if (r.vorpruefung) {
+        dokumentAustragen(dokumentAnfrage);
+        zeige('dokument');
+        return meldung('dokument-meldung', r.fehler);
+      }
+      return zeigeDokumentStatus({ status: 'UNKLAR' });
+    }
+    zeigeDokumentStatus(r);
+  } catch (error) {
+    if (error.message !== 'abgemeldet') zeigeDokumentStatus({ status: 'UNKLAR' });
+  } finally { dokumentSendet = false; zurueck.disabled = false; }
+};
+
+function zeigeDokumentStatus(r) {
+  const fertig = r.status === 'GEDRUCKT' || r.status === 'FEHLER';
+  if (fertig) dokumentAustragen(dokumentAnfrage);
+  $('dokument-status').hidden = fertig;
+  if (r.status === 'GEDRUCKT') return meldung('dokument-ergebnis', 'Zwei Kopien an den Drucker geschickt.', 'ok');
+  if (r.status === 'FEHLER') return meldung('dokument-ergebnis', 'Das Dokument konnte nicht erstellt werden. Bitte Eingaben prüfen und neu beginnen.');
+  if (r.status === 'IN_ARBEIT') return meldung('dokument-ergebnis', 'Wird noch erstellt. Bitte kurz warten und dann den Druckstatus prüfen.', 'hinweis');
+  meldung('dokument-ergebnis', 'Der Druckstatus ist noch unklar. Bitte prüfe den Drucker und frage bei Bedarf Lukas.', 'hinweis');
+}
+
+$('dokument-status').onclick = async () => {
+  try { zeigeDokumentStatus(await api('dokumentStatus', { anfrageId: dokumentAnfrage })); }
+  catch (error) { if (error.message !== 'abgemeldet') zeigeDokumentStatus({ status: 'UNKLAR' }); }
+};
+$('dokument-offen').onclick = () => {
+  dokumentAnfrage = offeneDokumente().at(-1)?.id;
+  if (!dokumentAnfrage) return ladeStart();
+  $('dokument-kontrolltitel').textContent = 'Druckstatus';
+  $('dokument-kontrollzeilen').replaceChildren();
+  $('dokument-drucken').hidden = true;
+  $('dokument-aendern').hidden = true;
+  zeige('dokument-kontrolle');
+  $('dokument-status').click();
+};
 
 // ---------- Formular ----------
 const FELDER = { T: ['patient', 'versnr', 'adresse', 'diagnose', 'leistung', 'termine', 'betrag', 'zahlung', 'rechnungsdatum', 'nummer'],
