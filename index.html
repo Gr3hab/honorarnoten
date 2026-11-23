@@ -55,7 +55,6 @@
   .liste li small { display:block; color:var(--grau); }
   .link { background:none; border:none; color:var(--blau); text-decoration:underline; font-size:18px; padding:12px 0; }
   summary.link { cursor:pointer; min-height:48px; }
-  a.gross { text-align:center; text-decoration:none; }
   .warten { text-align:center; padding-top:40px; }
   .rad { width:64px; height:64px; border:7px solid #cfdbe4; border-top-color:var(--blau); border-radius:50%; margin:24px auto; animation:dreh 1s linear infinite; }
   @keyframes dreh { to { transform:rotate(360deg); } }
@@ -84,9 +83,9 @@
   <!-- START -->
   <section id="s-start">
     <h1>Was möchtest du schreiben?</h1>
-    <div id="start-meldung"></div>
-    <button class="gross" type="button" data-art="T" data-leistung="Therapie – 60 Minuten">Therapie – 60 Minuten</button>
-    <button class="gross" type="button" data-art="E">Erstgespräch</button>
+    <div id="start-meldung" role="status"></div>
+    <button class="gross" type="button" data-art="T" data-leistung="Therapie – 60 Minuten" disabled>Therapie – 60 Minuten</button>
+    <button class="gross" type="button" data-art="E" disabled>Erstgespräch</button>
     <button class="gross hell" type="button" data-art="T" data-leistung="T3 – 60 Minuten" hidden>Therapie T3 – 60 Minuten</button>
     <details id="andere-leistungen" hidden>
       <summary class="link">Andere Leistung …</summary>
@@ -95,10 +94,9 @@
     <details id="weitere-dokumente" hidden>
       <summary class="link">Weitere Dokumente</summary>
       <div id="dokument-auswahl"></div>
-      <button class="gross hell" type="button" id="dokument-offen" hidden>Nochmal nachsehen</button>
     </details>
     <div id="offene-box" hidden>
-      <h2>Noch offen</h2>
+      <h2>Druckaufträge</h2>
       <ul class="liste" id="offene"></ul>
     </div>
     <h2>Zuletzt geschickt</h2>
@@ -109,7 +107,7 @@
   <!-- FORMULAR -->
   <section id="s-formular">
     <h1 id="f-titel">Therapie-Honorarnote</h1>
-    <div id="f-meldung"></div>
+    <div id="f-meldung" role="status"></div>
 
     <label for="f-patient" class="pflicht">Patient (Nachname Vorname)</label>
     <div class="hilfe">z. B. Huber Anna</div>
@@ -143,6 +141,12 @@
       <div class="hilfe" id="h-termine">Ein Datum pro Zeile, z. B. 3.11 und in der nächsten Zeile 10.11.</div>
       <textarea id="f-termine" autocomplete="off" aria-describedby="h-termine"></textarea>
       <button class="klein" type="button" id="btn-heute">Heute hinzufügen</button>
+      <details id="termin-kalender">
+        <summary class="link">Datum im Kalender wählen</summary>
+        <label for="f-kalender">Datum des Termins</label>
+        <input id="f-kalender" type="date">
+        <button class="gross hell" type="button" id="btn-termin">Datum übernehmen</button>
+      </details>
     </div>
 
     <label for="f-betrag" class="pflicht">Gesamtbetrag in Euro</label>
@@ -182,8 +186,6 @@
     <div id="dokument-ergebnis" role="status"></div>
     <button class="gross gruen" type="button" id="dokument-drucken">Stimmt – zweimal drucken</button>
     <button class="gross hell" type="button" id="dokument-aendern">Etwas ändern</button>
-    <button class="gross hell" type="button" id="dokument-status" hidden>Nochmal nachsehen</button>
-    <a class="gross hell" id="dokument-anrufen" hidden>Lukas anrufen</a>
     <button class="link" type="button" data-zurueck="start">Zurück zur Auswahl</button>
   </section>
 
@@ -205,7 +207,7 @@
     <div class="warten">
       <div class="rad" aria-hidden="true"></div>
       <h1 id="w-titel">Wird erstellt …</h1>
-      <p id="w-text">Die Honorarnote wird geschrieben und an den Drucker geschickt. Das dauert etwa eine halbe Minute.</p>
+      <p id="w-text" role="status"></p>
     </div>
   </section>
 
@@ -213,10 +215,9 @@
   <section id="s-ergebnis">
     <div class="gross-symbol" id="e-symbol">✓</div>
     <h1 id="e-titel" style="text-align:center">An den Drucker geschickt</h1>
-    <div id="e-text" class="box ok"></div>
-    <button class="gross hell" type="button" id="btn-nachsehen" hidden>Nochmal nachsehen</button>
-    <a class="gross hell" id="e-anrufen" hidden>Lukas anrufen</a>
-    <button class="gross" type="button" id="btn-neu">Neue Honorarnote</button>
+    <div id="e-text" class="box ok" role="status"></div>
+    <button class="gross hell" type="button" id="btn-korrigieren" hidden>Eingaben ansehen</button>
+    <button class="gross" type="button" id="btn-neu">Zur Auswahl</button>
   </section>
 
 </main>
@@ -240,7 +241,8 @@ const ablage = k => { try { return NUR_TAB(k) ? sessionStorage : localStorage; }
 const speicher = {
   get(k) {
     try {
-      const v = JSON.parse(ablage(k).getItem('hn_' + k));
+      const fach = ablage(k);
+      const v = JSON.parse(fach.getItem('hn_' + k));
       if (!NUR_TAB(k) || v === null) return v;
       if (!v || !v.__t || Date.now() - v.__t > ENTWURF_MAX_MS) { ablage(k).removeItem('hn_' + k); return null; }
       return v.wert;
@@ -252,16 +254,18 @@ const speicher = {
   weg(k) { try { ablage(k).removeItem('hn_' + k); } catch (e) {} }
 };
 let start = null, art = 'T', geprueft = null, antworten = {}, laufend = false;
+let aktuellerBildschirm = '';
 
 function zeige(name) {
+  aktuellerBildschirm = name;
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('aktiv', s.id === 's-' + name));
   window.scrollTo(0, 0);
 }
-function meldung(ziel, text, klasse) {
+function meldung(ziel, text, klasse, scrollen = true) {
   const el = $(ziel); el.textContent = '';
   if (!text) return;
   const d = document.createElement('div'); d.className = 'box ' + (klasse || 'fehler'); d.textContent = text; el.appendChild(d);
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (scrollen) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function neueId() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -271,17 +275,29 @@ function neueId() {
 async function api(aktion, daten) {
   if (API_URL === 'DEMO') return demoApi(aktion, Object.assign({ aktion }, daten));
   if (!/^https:\/\/script\.google\.com\//.test(API_URL)) throw new Error('nicht eingerichtet');
-  const r = await fetch(API_URL, {
-    method: 'POST', redirect: 'follow',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ aktion, token: speicher.get('token') }, daten))
-  });
-  if (!r.ok) throw new Error('netz');
-  const j = await r.json();
-  if (j && j.abgemeldet) { speicher.weg('token'); zeige('anmelden'); throw new Error('abgemeldet'); }
-  return j;
+  const token = speicher.get('token');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), /senden$/i.test(aktion) ? 60000 : 25000);
+  try {
+    const r = await fetch(API_URL, {
+      method: 'POST', redirect: 'follow', signal: controller.signal,
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({ aktion, token }, daten))
+    });
+    if (!r.ok) throw new Error('netz');
+    const j = await r.json();
+    if (token !== speicher.get('token')) throw new Error('abgemeldet');
+    if (j?.abgemeldet) {
+      speicher.weg('token'); start = null;
+      zeige('anmelden');
+      meldung('anmelden-meldung', 'Bitte melde dich wieder an. Deine offenen Druckaufträge werden danach weiter geprüft.', 'hinweis');
+      throw new Error('abgemeldet');
+    }
+    if (typeof j?.ok !== 'boolean') throw new Error('netz');
+    return j;
+  } finally { clearTimeout(timeout); }
 }
-const KEIN_NETZ = 'Keine Verbindung zum Internet. Bitte WLAN oder mobile Daten prüfen und nochmal tippen.';
+const KEIN_NETZ = 'Gerade keine Verbindung. Sobald das Internet wieder da ist, kannst du es noch einmal versuchen.';
 
 // ---------- Anmelden ----------
 $('pw-zeigen').onclick = () => { const p = $('passwort'); p.type = p.type === 'password' ? 'text' : 'password'; $('pw-zeigen').textContent = p.type === 'password' ? 'Passwort anzeigen' : 'Passwort verbergen'; };
@@ -301,21 +317,37 @@ $('btn-abmelden').onclick = async () => {
   if (!confirm('Wirklich abmelden? Danach braucht es wieder das Passwort.')) return;
   try { await api('abmelden', {}); } catch (e) {}
   speicher.weg('token'); speicher.weg('entwurf_T'); speicher.weg('entwurf_E');
+  start = null;
   try { Object.keys(sessionStorage).filter(k => k.indexOf('hn_entwurf_') === 0).forEach(k => sessionStorage.removeItem(k)); } catch (e) {}
   zeige('anmelden'); // offene Aufträge (nur IDs) bleiben, damit nach dem Anmelden nichts doppelt gesendet wird
 };
 
 // ---------- Start ----------
-async function ladeStart() {
-  zeige('start'); meldung('start-meldung', '');
+let startAnfrage = null;
+function ladeStart() {
+  zeige('start');
   $('andere-leistungen').open = false;
   $('weitere-dokumente').open = false;
+  zeigeOffene();
+  zeigeLetzte();
+  planeNachsehen(1000);
+  return aktualisiereStart();
+}
+
+function aktualisiereStart() {
+  if (!startAnfrage) startAnfrage = holeStart().finally(() => { startAnfrage = null; });
+  return startAnfrage;
+}
+
+async function holeStart() {
+  document.querySelectorAll('[data-art]').forEach(b => { b.disabled = !start; });
+  meldung('start-meldung', start ? '' : 'Wird geladen …', 'hinweis', false);
   try {
     const r = await api('start', {});
-    if (!r.ok) return meldung('start-meldung', r.fehler);
+    if (!r.ok) throw new Error('netz');
     start = r;
+    meldung('start-meldung', '');
     $('weitere-dokumente').hidden = !r.weitereDokumente;
-    $('dokument-offen').hidden = !offeneDokumente().length;
     const weitere = $('weitere-leistungen');
     weitere.replaceChildren();
     const favoriten = Array.from(document.querySelectorAll('[data-leistung]'), button => {
@@ -330,17 +362,30 @@ async function ladeStart() {
       weitere.appendChild(button);
     });
     $('andere-leistungen').hidden = !weitere.childElementCount;
-    const ul = $('letzte'); ul.textContent = '';
-    (r.letzte.length ? r.letzte : [{ patient: 'Noch keine', nummer: '', datum: '', status: '' }]).forEach(x => {
-      const li = document.createElement('li');
-      li.appendChild(document.createTextNode(`${x.nummer ? x.nummer + ' · ' : ''}${x.patient}`));
-      const s = document.createElement('small'); s.textContent = [x.datum, x.status].filter(Boolean).join(' · '); li.appendChild(s);
-      ul.appendChild(li);
-    });
-    // V11.10 (H2): Offene Aufträge stehen als Karten auf der Startseite und werden leise nachgesehen.
-    // Die Startseite bleibt stehen; neue Honorarnoten sind jederzeit möglich.
-    zeigeOffene(true);
-  } catch (e) { if (e.message !== 'abgemeldet') { meldung('start-meldung', KEIN_NETZ); zeigeOffene(false); } }
+    zeigeLetzte();
+    document.querySelectorAll('[data-art]').forEach(b => { b.disabled = false; });
+  } catch (e) {
+    if (e.message === 'abgemeldet') return;
+    meldung('start-meldung', 'Die Verbindung ist gerade unterbrochen. Die Seite lädt von selbst weiter.', 'hinweis', false);
+    planeNachsehen(12000);
+  }
+}
+
+function zeigeLetzte() {
+  const ul = $('letzte');
+  const dokumente = offeneDokumente().filter(o => o.status === 'GEDRUCKT').sort((a, b) => b.zeit - a.zeit);
+  const letzte = [...dokumente.slice(0, 4).map(o => ({
+    patient: auftragstitel(o), datum: datumKurz(o), status: 'an Drucker geschickt'
+  })), ...(start?.letzte || [])];
+  ul.replaceChildren();
+  for (const x of letzte.length ? letzte : [{ patient: start ? 'Noch keine' : 'Wird geladen …' }]) {
+    const li = document.createElement('li');
+    li.append(document.createTextNode(x.nummer ? x.nummer + ' · ' + x.patient : x.patient));
+    const s = document.createElement('small');
+    s.textContent = [x.datum, x.status].filter(Boolean).join(' · ');
+    li.appendChild(s);
+    ul.appendChild(li);
+  }
 }
 document.querySelectorAll('[data-art]').forEach(b => b.onclick = () => oeffneFormular(b.dataset.art, b.dataset.leistung));
 document.querySelectorAll('[data-zurueck]').forEach(b => b.onclick = () => ladeStart());
@@ -354,10 +399,19 @@ const DOKUMENTE = {
 };
 let dokumentEntwurf = null;
 let dokumentAnfrage = '';
-let dokumentSendet = false;
+let dokumentSendet = false, dokumentVorschauLaeuft = false;
 
 function offeneDokumente() {
-  return (speicher.get('dokumentOffen') || []).filter(e => Date.now() - e.zeit < 30 * 86400000);
+  const l = speicher.get('dokumentOffen');
+  return Array.isArray(l) ? l.filter(e => e?.id && Date.now() - e.zeit < OFFEN_MAX_MS) : [];
+}
+
+function dokumentMerken(o) {
+  const { id, zeit, dokument, entwurfZeit, status } = o;
+  const liste = offeneDokumente().filter(e => e.id !== id);
+  liste.push({ id, zeit, dokument, entwurfZeit, status });
+  const fertig = liste.filter(e => e.status === 'GEDRUCKT').sort((a, b) => b.zeit - a.zeit);
+  speicher.set('dokumentOffen', [...liste.filter(e => e.status !== 'GEDRUCKT'), ...fertig.slice(0, 4)]);
 }
 
 function dokumentAustragen(id) {
@@ -372,6 +426,12 @@ Object.entries(DOKUMENTE).forEach(([art, { titel }]) => {
 });
 
 function oeffneDokument(art) {
+  if (!start) return ladeStart();
+  const schluessel = 'entwurf_d_' + art;
+  const entwurf = speicher.get(schluessel);
+  const offen = entwurf && offeneDokumente().find(o => o.dokument === art &&
+    !endgueltig(o) && o.entwurfZeit === speicher.zeit(schluessel));
+  if (offen) return oeffneAuftrag(offen);
   dokumentEntwurf = { art };
   const { titel, felder } = DOKUMENTE[art];
   $('dokument-titel').textContent = titel;
@@ -387,26 +447,39 @@ function oeffneDokument(art) {
     eingabe.required = !beschriftung.endsWith('(freiwillig)');
     if (typ === 'zahlung') {
       for (const text of start.zahlungen) eingabe.add(new Option(text, text));
-      eingabe.selectedIndex = -1;
+      eingabe.value = entwurf?.zahlung || '';
     } else {
       if (typ === 'date') eingabe.type = 'date';
       if (typ === 'numeric' || typ === 'decimal') eingabe.inputMode = typ;
       eingabe.value = name === 'nummer' ? String(start.vorschlag.nummer) : (vor || '');
+      if (entwurf && name in entwurf) eingabe.value = entwurf[name];
     }
+    eingabe.autocomplete = 'off';
     gruppe.append(label, eingabe);
   }
   zeige('dokument');
 }
 
+$('dokument-formular').addEventListener('input', e => {
+  speicher.set('entwurf_d_' + dokumentEntwurf.art, Object.fromEntries(new FormData(e.currentTarget)));
+});
+
 $('dokument-formular').onsubmit = async e => {
   e.preventDefault();
+  if (dokumentVorschauLaeuft) return;
+  dokumentVorschauLaeuft = true;
   const art = dokumentEntwurf.art;
   const felder = Object.fromEntries(new FormData(e.currentTarget));
   const submit = e.currentTarget.querySelector('button');
   submit.disabled = true;
   try {
     const r = await api('dokumentPruefen', { art, felder });
-    if (!r.ok) return meldung('dokument-meldung', r.fehler);
+    if (aktuellerBildschirm !== 'dokument' || dokumentEntwurf.art !== art) return;
+    if (!r.ok) {
+      meldung('dokument-meldung', r.fehler);
+      nummerVorschlagKnopf('dokument-meldung', r.fehler, 'd-nummer', () => submit.click());
+      return;
+    }
     if (r.nummer) felder.nummer = r.nummer;
     dokumentEntwurf = { art, felder };
     dokumentAnfrage = neueId();
@@ -420,67 +493,42 @@ $('dokument-formular').onsubmit = async e => {
     }
     $('dokument-drucken').hidden = false;
     $('dokument-aendern').hidden = false;
-    $('dokument-status').hidden = true;
-    anrufLink('dokument-anrufen', false);
     meldung('dokument-ergebnis', '');
     zeige('dokument-kontrolle');
   } catch (error) {
     if (error.message !== 'abgemeldet') meldung('dokument-meldung', KEIN_NETZ);
-  } finally { submit.disabled = false; }
+  } finally { submit.disabled = false; dokumentVorschauLaeuft = false; }
 };
 
 $('dokument-aendern').onclick = () => zeige('dokument');
 $('dokument-drucken').onclick = async () => {
   if (dokumentSendet) return;
   dokumentSendet = true;
-  $('dokument-drucken').hidden = true;
-  $('dokument-aendern').hidden = true;
-  const zurueck = $('s-dokument-kontrolle').querySelector('[data-zurueck]');
-  zurueck.disabled = true;
-  const pending = offeneDokumente().filter(e => e.id !== dokumentAnfrage);
-  speicher.set('dokumentOffen', [...pending, { id: dokumentAnfrage, zeit: Date.now() }]);
-  meldung('dokument-ergebnis', 'Wird erstellt und an den Drucker geschickt …', 'hinweis');
+  const { art, felder } = dokumentEntwurf;
+  const schluessel = 'entwurf_d_' + art;
+  if (!speicher.get(schluessel)) speicher.set(schluessel, felder);
+  const o = { id: dokumentAnfrage, dokument: art, zeit: Date.now(), entwurfZeit: speicher.zeit(schluessel) };
+  dokumentMerken(o);
+  drucktGerade.add(o.id);
+  zeigenBeimSenden('Das Dokument');
   try {
-    const r = await api('dokumentSenden', { ...dokumentEntwurf, anfrageId: dokumentAnfrage });
-    if (!r.ok) {
-      if (r.vorpruefung) {
-        dokumentAustragen(dokumentAnfrage);
-        zeige('dokument');
-        return meldung('dokument-meldung', r.fehler);
-      }
-      return zeigeDokumentStatus({ status: 'UNKLAR' });
+    const r = await api('dokumentSenden', { art, felder, anfrageId: o.id });
+    if (!r.ok && r.vorpruefung) {
+      dokumentAustragen(o.id);
+      zeige('dokument');
+      meldung('dokument-meldung', r.fehler);
+      nummerVorschlagKnopf('dokument-meldung', r.fehler, 'd-nummer', () => $('dokument-formular').requestSubmit());
+    } else {
+      behandleStatus(o, r);
+      zeigeErgebnis(o);
     }
-    zeigeDokumentStatus(r);
   } catch (error) {
-    if (error.message !== 'abgemeldet') zeigeDokumentStatus({ status: 'UNKLAR' });
-  } finally { dokumentSendet = false; zurueck.disabled = false; }
-};
-
-function zeigeDokumentStatus(r) {
-  const fertig = r.status === 'GEDRUCKT' || r.status === 'FEHLER';
-  if (fertig) dokumentAustragen(dokumentAnfrage);
-  $('dokument-status').hidden = fertig;
-  anrufLink('dokument-anrufen', r.status !== 'GEDRUCKT' && r.status !== 'IN_ARBEIT');
-  if (r.status === 'GEDRUCKT') return meldung('dokument-ergebnis', 'Zwei Kopien an den Drucker geschickt.', 'ok');
-  if (r.status === 'FEHLER') return meldung('dokument-ergebnis', 'Das Dokument konnte nicht erstellt werden. Bitte Eingaben prüfen und neu beginnen.');
-  if (r.status === 'IN_ARBEIT') return meldung('dokument-ergebnis', 'Wird noch erstellt. Bitte kurz warten und dann den Druckstatus prüfen.', 'hinweis');
-  meldung('dokument-ergebnis', 'Bitte schau am Drucker nach. Wenn du unsicher bist, ruf Lukas an.', 'hinweis');
-}
-
-$('dokument-status').onclick = async () => {
-  try { zeigeDokumentStatus(await api('dokumentStatus', { anfrageId: dokumentAnfrage })); }
-  catch (error) { if (error.message !== 'abgemeldet') zeigeDokumentStatus({ status: 'UNKLAR' }); }
-};
-$('dokument-offen').onclick = () => {
-  dokumentAnfrage = offeneDokumente().at(-1)?.id;
-  if (!dokumentAnfrage) return ladeStart();
-  $('dokument-kontrolltitel').textContent = 'Druckstatus';
-  $('dokument-kontrollzeilen').replaceChildren();
-  $('dokument-drucken').hidden = true;
-  $('dokument-aendern').hidden = true;
-  anrufLink('dokument-anrufen', false);
-  zeige('dokument-kontrolle');
-  $('dokument-status').click();
+    if (error.message !== 'abgemeldet') zeigeErgebnis(o);
+  } finally {
+    dokumentSendet = false;
+    drucktGerade.delete(o.id);
+    planeNachsehen(4000);
+  }
 };
 
 // ---------- Formular ----------
@@ -510,6 +558,7 @@ function kacheln(id, werte, feld) {
   const box = $(id); box.textContent = '';
   werte.forEach(w => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'kachel'; b.textContent = w;
+    b.setAttribute('aria-label', w);
     b.setAttribute('aria-pressed', String(auswahl[feld] === w));
     b.onclick = () => {
       auswahl[feld] = w;
@@ -535,18 +584,23 @@ function merkeEntwurf() {
 }
 function oeffneFormular(a, leistung) {
   if (!start) return ladeStart();
+  const entwurf = speicher.get('entwurf_' + a);
+  const offen = entwurf && offeneLesen().find(o => o.art === a && !endgueltig(o) &&
+    o.entwurfZeit === speicher.zeit('entwurf_' + a));
+  if (offen) return oeffneAuftrag(offen);
   art = a; antworten = {}; geprueft = null;
   document.querySelectorAll('[data-nur]').forEach(el => el.hidden = el.dataset.nur !== a);
   $('l-diagnose').textContent = a === 'T' ? 'Diagnose' : 'Diagnose (falls schon bekannt)';
   $('l-diagnose').classList.toggle('pflicht', a === 'T');
   const zuletzt = speicher.get('zuletzt_' + a) || {};
-  const entwurf = speicher.get('entwurf_' + a);
   const betragVorschlag = leistung && leistung !== zuletzt.leistung ? '' : zuletzt.betrag || '';
   const basis = entwurf || { betrag: betragVorschlag, leistung: zuletzt.leistung || '', zahlung: zuletzt.zahlung || '' };
   ['patient', 'versnr', 'adresse', 'diagnose', 'termine', 'termin', 'betrag', 'rechnungsdatum', 'nummer'].forEach(k => { $('f-' + k).value = basis[k] || ''; });
   // Mit Jahreszahl vorbelegt: dann ist das Jahr nie zweifelhaft.
   if (!$('f-rechnungsdatum').value) $('f-rechnungsdatum').value = start.heute;
   $('rechnungsdatum-auswahl').open = false;
+  $('termin-kalender').open = false;
+  $('f-kalender').value = '';
   zeigeRechnungsdatum();
   if (a === 'E' && !$('f-termin').value) $('f-termin').value = start.heute;
   const nummer = $('f-nummer');
@@ -564,13 +618,24 @@ function oeffneFormular(a, leistung) {
 $('f-nummer').addEventListener('input', () => { nummerAutomatisch = !$('f-nummer').value.trim(); });
 $('f-rechnungsdatum').addEventListener('input', zeigeRechnungsdatum);
 document.querySelectorAll('#s-formular input, #s-formular textarea').forEach(el => el.addEventListener('input', merkeEntwurf));
-$('btn-heute').onclick = () => {
+function terminHinzufuegen(datum) {
   const t = $('f-termine');
-  const heute = start.heute.slice(0, 5).replace(/^0/, '').replace('.0', '.');
   const eingabe = t.value.trim().replace(/[,;\s]+$/, '');
-  if (auswahl.leistung.startsWith('Begutachtung') || !eingabe) t.value = heute;
-  else if (!eingabe.split(/[,;\s]+/).some(termin => termin === heute || termin === start.heute)) t.value = eingabe + '\n' + heute;
+  const vereinheitlicht = wert => wert.split('.').filter(Boolean).map(Number).join('.');
+  if (auswahl.leistung.startsWith('Begutachtung') || !eingabe) t.value = datum;
+  else {
+    const liste = eingabe.split(/[,;\s]+/);
+    if (!liste.some(termin => vereinheitlicht(termin) === vereinheitlicht(datum))) t.value = eingabe + '\n' + datum;
+  }
   merkeEntwurf();
+}
+$('btn-heute').onclick = () => terminHinzufuegen(start.heute);
+$('btn-termin').onclick = () => {
+  const kalender = $('f-kalender');
+  if (!kalender.value) return kalender.focus();
+  terminHinzufuegen(kalender.value.split('-').reverse().join('.'));
+  kalender.value = '';
+  $('termin-kalender').open = false;
 };
 $('btn-leeren').onclick = () => {
   if (!confirm('Alle Eingaben löschen?')) return;
@@ -594,19 +659,35 @@ async function pruefen() {
   if (fehlt.length) return meldung('f-meldung', 'Bitte noch ausfüllen: ' + fehlt.join(', ') + '.');
   $('btn-weiter').disabled = true; $('btn-weiter').textContent = 'Wird geprüft …';
   try {
+    const angefragteArt = art;
     const r = await api('pruefen', { art, felder: f, nummerVorgeschlagen: nummerAutomatisch });
+    if (aktuellerBildschirm !== 'formular' || angefragteArt !== art) return;
     if (!r.ok) {
       zeige('formular');
-      if (/rechnungsdatum/i.test(r.fehler)) $('rechnungsdatum-auswahl').open = true;
-      meldung('f-meldung', r.fehler + (r.vorschlag ? ` Die nächste freie Nummer ist ${r.vorschlag}.` : ''));
-      if (r.feld === 'nummer' && r.vorschlag) nummerKnopf(r.vorschlag);
+      formularFehler(r);
     } else {
       geprueft = { felder: Object.assign({}, f, { nummer: String(r.nummer) }), antwort: r, anfrageId: neueId() };
       antworten = {};
       zeigeKontrolle();
     }
-  } catch (e) { if (e.message !== 'abgemeldet') meldung('f-meldung', KEIN_NETZ); }
-  $('btn-weiter').disabled = false; $('btn-weiter').textContent = 'Weiter – kontrollieren';
+  } catch (e) {
+    if (e.message !== 'abgemeldet' && aktuellerBildschirm === 'formular') meldung('f-meldung', KEIN_NETZ);
+  } finally {
+    $('btn-weiter').disabled = false; $('btn-weiter').textContent = 'Weiter – kontrollieren';
+  }
+}
+function formularFehler(r) {
+  if (/rechnungsdatum/i.test(r.fehler)) $('rechnungsdatum-auswahl').open = true;
+  meldung('f-meldung', r.fehler + (r.vorschlag ? ` Die nächste freie Nummer ist ${r.vorschlag}.` : ''));
+  if (r.feld === 'nummer' && r.vorschlag) nummerKnopf(r.vorschlag);
+}
+function nummerVorschlagKnopf(ziel, fehler, feld, weiter) {
+  const n = /nächste freie Nummer ist (20\d{2}\/\d+)\b/i.exec(fehler)?.[1];
+  if (!n || !$(feld)) return;
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'gross hell'; b.textContent = `Nummer ${n} nehmen`;
+  b.onclick = () => { $(feld).value = n; $(feld).dispatchEvent(new Event('input', { bubbles: true })); weiter(); };
+  $(ziel).appendChild(b);
 }
 function nummerKnopf(n) {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'gross hell'; b.textContent = `Nummer ${n} nehmen`;
@@ -675,153 +756,234 @@ function offeneLesen() {
 }
 function offenMerken(o) { const l = offeneLesen().filter(x => x.anfrageId !== o.anfrageId); l.push(sauber(o)); speicher.set('offene', l); }
 function offenWeg(id) { speicher.set('offene', offeneLesen().filter(x => x.anfrageId !== id)); }
-/** Antwort des Servers zu einem Auftrag im Handy vermerken. Druckt nie etwas. */
-function verbuchen(o, r) {
-  if (!o || !r || !r.ok) return;
-  if (r.speicherUnklar) o.unklar = true;
-  if (ENDGUELTIG.includes(r.status)) {
-    offenWeg(o.anfrageId);
-    if (r.status === 'GEDRUCKT') {
-      const z = speicher.get('entwurf_z_' + o.anfrageId); // Auswahlwerte nur im Tab gemerkt (siehe senden)
-      if (z) speicher.set('zuletzt_' + o.art, z);
-      speicher.weg('entwurf_z_' + o.anfrageId);
-      // Entwurf nur löschen, wenn es noch genau der gesendete ist (nicht ein neuer, gerade begonnener).
-      if (o.entwurfZeit && speicher.zeit('entwurf_' + o.art) === o.entwurfZeit) speicher.weg('entwurf_' + o.art);
-    }
+const drucktGerade = new Set();
+const statusAnfragen = new Map();
+const idVon = o => o.id || o.anfrageId;
+const endgueltig = o => ENDGUELTIG.includes(o.status) || o.status === 'BEENDET' || (o.id && o.status === 'FEHLER');
+const auftraege = () => [...offeneLesen(), ...offeneDokumente()].filter(o => o.status !== 'GEDRUCKT').sort((a, b) => b.zeit - a.zeit);
+const datumKurz = o => new Date(o.zeit).toLocaleString('de-AT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const auftragstitel = o => o.id ? (DOKUMENTE[o.dokument]?.titel || 'Weiteres Dokument') :
+  (o.art === 'E' ? 'Erstgespräch' : 'Therapie-Honorarnote');
+const vermerk = {
+  GEDRUCKT: 'Zwei Kopien an den Drucker geschickt.',
+  ABGELEHNT: 'Die Honorarnote wurde nicht gedruckt.',
+  UNBEKANNT: 'Der Auftrag ist nicht angekommen.',
+  FEHLER: 'Die Honorarnote ist gespeichert. Ein neuer Versuch läuft automatisch.',
+  BEENDET: 'Die Honorarnote ist gespeichert. Der Druck konnte nicht abgeschlossen werden.',
+  UNKLAR: 'Die App prüft weiter. Wenn schon zwei Kopien am Drucker liegen, ist für dich alles erledigt.',
+  IN_ARBEIT: 'Dein Auftrag wird bearbeitet. Du kannst inzwischen zur Auswahl zurück.',
+  NOCH_OFFEN: 'Die App prüft automatisch, ob dein Auftrag angekommen ist.'
+};
+
+function behandleStatus(o, r) {
+  if (!r?.ok || !r.status) return;
+  const id = idVon(o);
+  if (o.id && r.status === 'UNBEKANNT' && Date.now() - o.zeit < 600000) {
+    o.status = 'NOCH_OFFEN';
   } else {
-    o.status = r.status; if (r.nummer) o.nummer = r.nummer; o.text = r.text; // nur im Speicher der Seite
-    if (offeneLesen().some(x => x.anfrageId === o.anfrageId)) offenMerken(o);
+    r = deuten(o, r);
+    o.status = r.beendet || (r.status === 'FEHLER' && r.text?.includes('mehreren Versuchen nicht fertig')) ? 'BEENDET' : r.status;
+    o.unklar ||= Boolean(r.speicherUnklar);
+    o.antwort = r;
   }
-}
-function offenTitel(o) {
-  const z = new Date(o.zeit || 0); const p2 = n => String(n).padStart(2, '0');
-  const was = o.art === 'E' ? 'Erstgespräch' : 'Therapie-Honorarnote';
-  return (o.nummer ? `${was} ${o.nummer}` : was) + ` · gesendet ${p2(z.getDate())}.${p2(z.getMonth() + 1)}. ${p2(z.getHours())}:${p2(z.getMinutes())}`;
-}
-const STATUS_KURZ = { GEDRUCKT: 'An den Drucker geschickt.', ABGELEHNT: 'Nicht gedruckt.', UNBEKANNT: 'Nicht angekommen.',
-  FEHLER: 'Noch nicht fertig – das System versucht es von selbst nochmal. Bitte NICHT nochmal senden.',
-  UNKLAR: 'Bitte schau am Drucker nach. Schick dieselbe Honorarnote nicht noch einmal.',
-  IN_ARBEIT: 'Wird noch bearbeitet. Bitte NICHT nochmal senden.', NOCH_OFFEN: 'Noch keine Rückmeldung. Bitte NICHT nochmal senden.' };
-function karte(o, li) {
-  li.textContent = '';
-  li.className = o.status === 'GEDRUCKT' ? 'ok' : (o.status === 'ABGELEHNT' || o.status === 'FEHLER' ? 'fehler' : 'hinweis');
-  li.appendChild(document.createTextNode(offenTitel(o)));
-  const s = document.createElement('small');
-  s.textContent = o.status ? (STATUS_KURZ[o.status] || o.text || '') : 'Wird nachgesehen …';
-  li.appendChild(s);
-  if (!ENDGUELTIG.includes(o.status)) {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'klein'; b.textContent = 'Nochmal nachsehen';
-    b.onclick = () => holeStatus(o);
-    li.appendChild(b);
-  } else if (o.status !== 'GEDRUCKT') {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'klein'; b.textContent = 'Genauer ansehen';
-    b.onclick = () => zeigeErgebnis(o.antwort, o);
-    li.appendChild(b);
+  if (o.status === 'GEDRUCKT') {
+    if (o.id) dokumentMerken(o); else offenWeg(id);
+    if (!o.id) {
+      const zuletzt = speicher.get('entwurf_z_' + id);
+      if (zuletzt) speicher.set('zuletzt_' + o.art, zuletzt);
+    }
+    const schluessel = entwurfVon(o);
+    if (o.entwurfZeit && speicher.zeit(schluessel) === o.entwurfZeit) speicher.weg(schluessel);
+  } else {
+    if (o.id) dokumentMerken(o); else offenMerken(o);
   }
-}
-function zeigeOffene(nachsehen) {
-  const liste = offeneLesen();
-  const ul = $('offene'); ul.textContent = '';
-  $('offene-box').hidden = !liste.length;
-  liste.forEach(o => {
-    const li = document.createElement('li'); li.dataset.id = o.anfrageId; ul.appendChild(li); karte(o, li);
-    if (!nachsehen) return;
-    api('status', { anfrageId: o.anfrageId, alterMs: Date.now() - (o.zeit || 0) }).then(r0 => {
-      if (!r0 || !r0.ok) return;
-      const r = deuten(o, r0);
-      verbuchen(o, r);
-      o.status = r.status; if (r.nummer) o.nummer = r.nummer; o.antwort = r;
-      if (li.isConnected) karte(o, li);
-    }).catch(() => {});
-  });
+  if (endgueltig(o)) speicher.weg('entwurf_z_' + id);
 }
 
-// ---------- Senden ----------
+const entwurfVon = o => o.id ? 'entwurf_d_' + o.dokument : 'entwurf_' + o.art;
+function statusText(o) {
+  if (o.id && o.status === 'FEHLER') return 'Das Dokument konnte nicht erstellt werden.';
+  if (o.status === 'FEHLER' && o.antwort?.test) return 'Die Test-Honorarnote konnte nicht gedruckt werden.';
+  if (o.status === 'ABGELEHNT' && o.antwort?.test) return 'Der Testdruck war nicht freigegeben.';
+  if (o.status === 'ABGELEHNT' && o.antwort?.text) return o.antwort.text;
+  if (o.status === 'GEDRUCKT' && o.antwort?.seiten > 1) return vermerk.GEDRUCKT + ' Jede Kopie hat ' + o.antwort.seiten + ' Seiten.';
+  return vermerk[o.status] || vermerk.NOCH_OFFEN;
+}
+
+function zeigeOffene() {
+  const liste = auftraege();
+  const ul = $('offene');
+  const zuvor = new Map(Array.from(ul.children, li => [li.dataset.id, li]));
+  $('offene-box').hidden = !liste.length;
+  for (const o of liste) {
+    const id = idVon(o);
+    const li = zuvor.get(id) || document.createElement('li');
+    zuvor.delete(id);
+    const beschriftung = auftragstitel(o) + ' · ' + datumKurz(o);
+    const status = statusText(o);
+    if (!li.dataset.id) {
+      li.dataset.id = id;
+      const name = document.createElement('span');
+      name.textContent = beschriftung;
+      const text = document.createElement('small');
+      const knopf = document.createElement('button');
+      knopf.type = 'button'; knopf.className = 'klein'; knopf.textContent = 'Ansehen';
+      li.append(name, text, knopf);
+      ul.appendChild(li);
+    }
+    li.className = endgueltig(o) ? 'fehler' : 'hinweis';
+    if (li.children[1].textContent !== status) li.children[1].textContent = status;
+    li.children[2].onclick = () => oeffneAuftrag(o);
+  }
+  zuvor.forEach(li => li.remove());
+}
+
+let nachsehenTimer = 0, naechstePruefung = 0, prueftAuftraege = false, sofortNachsehen = false;
+function planeNachsehen(ms) {
+  if (naechstePruefung && naechstePruefung <= Date.now() + ms) return;
+  clearTimeout(nachsehenTimer);
+  naechstePruefung = Date.now() + ms;
+  nachsehenTimer = setTimeout(pruefeAuftraege, ms);
+}
+
+async function pruefeAuftraege() {
+  naechstePruefung = 0;
+  if (prueftAuftraege || document.hidden || navigator.onLine === false ||
+      (!speicher.get('token') && API_URL !== 'DEMO')) return;
+  prueftAuftraege = true;
+  try {
+    if (!start && aktuellerBildschirm === 'start') await aktualisiereStart();
+    const offen = auftraege().filter(o => !endgueltig(o) && !drucktGerade.has(idVon(o)));
+    for (const o of offen) await holeStatus(o);
+  } finally {
+    prueftAuftraege = false;
+    const offen = auftraege().filter(o => !endgueltig(o));
+    if (sofortNachsehen) {
+      sofortNachsehen = false;
+      planeNachsehen(0);
+    } else if (offen.length) {
+      const alter = Date.now() - offen[0].zeit;
+      planeNachsehen(alter < 120000 ? 12000 : alter < 600000 ? 45000 : 180000);
+    }
+  }
+}
+function nachsehenBeiRueckkehr() {
+  if (prueftAuftraege) sofortNachsehen = true;
+  else planeNachsehen(0);
+}
+window.addEventListener('online', () => { if (aktuellerBildschirm === 'start') aktualisiereStart(); nachsehenBeiRueckkehr(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) nachsehenBeiRueckkehr(); });
+
+function holeStatus(o) {
+  const id = idVon(o);
+  if (drucktGerade.has(id) || endgueltig(o)) return;
+  if (!statusAnfragen.has(id)) statusAnfragen.set(id, leseStatus(o).finally(() => statusAnfragen.delete(id)));
+  return statusAnfragen.get(id);
+}
+
+async function leseStatus(o) {
+  const id = idVon(o);
+  try {
+    const r = await api(o.id ? 'dokumentStatus' : 'status', { anfrageId: id, alterMs: Date.now() - o.zeit });
+    if (!r.ok) return;
+    behandleStatus(o, r);
+    if (aktuellerBildschirm === 'ergebnis' && aktuell && idVon(aktuell) === id) zeigeErgebnis(o, false);
+    if (aktuellerBildschirm === 'start') {
+      zeigeOffene();
+      if (o.status === 'GEDRUCKT') {
+        if (o.id) zeigeLetzte(); else aktualisiereStart();
+      }
+    }
+  } catch (e) {
+    // Nach einer Unterbrechung läuft die Prüfung im nächsten Intervall weiter.
+  }
+}
+
+function oeffneAuftrag(o) {
+  zeigeErgebnis(o);
+  holeStatus(o);
+}
+
+function zeigenBeimSenden(was) {
+  $('w-titel').textContent = 'Wird erstellt …';
+  $('w-text').textContent = was + ' wird vorbereitet. Danach gehen zwei Kopien an den Drucker.';
+  zeige('warten');
+}
+
 async function senden() {
   if (laufend || !geprueft) return;
   laufend = true;
   const f = geprueft.felder;
-  // V11.10: Eine geprüfte Honorarnote behält IHRE Anfrage-ID, auch beim erneuten Tippen nach „nicht gespeichert“.
-  // Hat Google doch gespeichert, erkennt der Server die ID und erstellt nichts doppelt.
-  if (!geprueft.anfrageId) geprueft.anfrageId = neueId();
-  const offen = { anfrageId: geprueft.anfrageId, art, zeit: Date.now(), entwurfZeit: speicher.zeit('entwurf_' + art) };
-  speicher.set('entwurf_z_' + offen.anfrageId, { betrag: f.betrag, leistung: f.leistung, zahlung: f.zahlung });
-  offenMerken(offen);
-  $('w-titel').textContent = 'Wird erstellt …';
-  $('w-text').textContent = 'Die Honorarnote wird geschrieben und an den Drucker geschickt. Das dauert etwa eine halbe Minute. Bitte warten.';
-  zeige('warten');
+  if (!speicher.get('entwurf_' + art)) merkeSendeEntwurf(f);
+  const o = { anfrageId: geprueft.anfrageId, art, zeit: Date.now(), entwurfZeit: speicher.zeit('entwurf_' + art) };
+  const daten = { art, felder: f, anfrageId: o.anfrageId, antworten, nummerVorgeschlagen: false };
+  speicher.set('entwurf_z_' + o.anfrageId, { betrag: f.betrag, leistung: f.leistung, zahlung: f.zahlung });
+  offenMerken(o);
+  drucktGerade.add(o.anfrageId);
+  zeigenBeimSenden('Die Honorarnote');
   try {
-    const r = await api('senden', { art, felder: f, anfrageId: offen.anfrageId, antworten, nummerVorgeschlagen: false });
+    let r = await api('senden', daten);
+    for (const pause of [5000, 15000]) {
+      if (r.ok || !r.nichtGespeichert) break;
+      $('w-text').textContent = 'Die Verbindung hat kurz gestockt. Die App versucht es von selbst noch einmal.';
+      await new Promise(resolve => setTimeout(resolve, pause));
+      r = await api('senden', daten);
+    }
     if (!r.ok && (r.vorpruefung || r.frage || r.nichtGespeichert)) {
-      // Der Server sagt ausdrücklich: nichts gespeichert. Erst dann darf der Auftrag aus der Liste.
-      offenWeg(offen.anfrageId);
-      if (r.frage) { geprueft.antwort.frage = r.frage; antworten = {}; zeigeKontrolle(); }
-      else if (r.nichtGespeichert) {
-        // V11.10: zurück zur Kontrolle; erneutes „Stimmt – zweimal drucken“ sendet DIESELBE Anfrage-ID.
+      offenWeg(o.anfrageId);
+      speicher.weg('entwurf_z_' + o.anfrageId);
+      if (r.frage) {
+        geprueft.antwort.frage = r.frage;
+        antworten = {};
         zeigeKontrolle();
-        const d = document.createElement('div'); d.className = 'box fehler'; d.textContent = r.fehler;
+      } else if (r.nichtGespeichert) {
+        zeigeKontrolle();
+        const d = document.createElement('div');
+        d.className = 'box hinweis';
+        d.textContent = 'Die Verbindung funktioniert noch nicht. Deine Eingaben sind da. Du kannst den Druck gleich noch einmal versuchen.';
         $('k-hinweise').prepend(d);
+      } else {
+        zeige('formular');
+        formularFehler(r);
       }
-      else { zeige('formular'); meldung('f-meldung', r.fehler + (r.vorschlag ? ` Die nächste freie Nummer ist ${r.vorschlag}.` : '')); if (r.feld === 'nummer' && r.vorschlag) nummerKnopf(r.vorschlag); }
-    } else if (!r.ok) {
-      // V11.10 (H1): Fehler OHNE die Zusage „nichts gespeichert“: Der Auftrag kann angekommen und sogar gedruckt sein.
-      zeigeUnklar(offen);
-    } else ergebnis(r, offen);
+    } else {
+      behandleStatus(o, r);
+      zeigeErgebnis(o);
+    }
   } catch (e) {
-    if (e.message !== 'abgemeldet') zeigeUnklar(offen);
+    if (e.message !== 'abgemeldet') zeigeErgebnis(o);
+  } finally {
+    laufend = false;
+    drucktGerade.delete(o.anfrageId);
+    planeNachsehen(4000);
   }
-  laufend = false;
 }
-function zeigeUnklar(o) {
-  aktuell = o || aktuell;
-  $('e-symbol').textContent = '⚠'; $('e-titel').textContent = 'Verbindung unterbrochen';
-  $('e-text').className = 'box hinweis';
-  $('e-text').textContent = 'Schau zuerst am Drucker nach. Schick dieselbe Honorarnote nicht noch einmal.';
-  anrufLink('e-anrufen', true);
-  $('btn-nachsehen').hidden = false; zeige('ergebnis');
+
+function merkeSendeEntwurf(f) {
+  speicher.set('entwurf_' + art, { ...f, nummerAutomatisch });
 }
-async function holeStatus(o) {
+
+function zeigeErgebnis(o, wechseln = true) {
   aktuell = o;
-  try {
-    // V11.9: alterMs misst das Handy selbst; erst nach 10 Minuten ohne Spur sagt Google „nicht angekommen“.
-    const r = await api('status', { anfrageId: o.anfrageId, alterMs: Date.now() - (o.zeit || 0) });
-    if (r.ok) ergebnis(r, o);
-  } catch (e) { if (e.message !== 'abgemeldet') zeigeUnklar(o); }
+  const fertig = o.status === 'GEDRUCKT';
+  const fehler = endgueltig(o) && !fertig;
+  const titel = fertig ? 'An den Drucker geschickt' : (fehler ? 'Druck nicht abgeschlossen' : 'Druckauftrag läuft');
+  $('e-symbol').textContent = fertig ? '✓' : (fehler ? '!' : '…');
+  $('e-titel').textContent = titel;
+  $('e-text').className = 'box ' + (fertig ? 'ok' : (fehler ? 'fehler' : 'hinweis'));
+  const nummer = o.antwort?.nummer;
+  const text = (nummer ? nummer + ' · ' : '') + statusText(o);
+  if ($('e-text').textContent !== text) $('e-text').textContent = text;
+  const korrigieren = fehler && o.status !== 'BEENDET' && o.entwurfZeit && speicher.get(entwurfVon(o)) &&
+    speicher.zeit(entwurfVon(o)) === o.entwurfZeit;
+  $('btn-korrigieren').hidden = !korrigieren;
+  if (wechseln) zeige('ergebnis');
 }
-$('btn-nachsehen').onclick = () => { if (aktuell) holeStatus(aktuell); else ladeStart(); };
-function ergebnis(r0, o) {
-  const r = deuten(o, r0);
-  verbuchen(o, r);
-  zeigeErgebnis(r, o);
-}
-function zeigeErgebnis(r, o) {
-  aktuell = o || null;
-  if (!r) return ladeStart();
-  if (r.status === 'UNBEKANNT') {
-    anrufLink('e-anrufen', false);
-    $('e-symbol').textContent = 'ℹ'; $('e-titel').textContent = 'Nicht angekommen';
-    $('e-text').className = 'box hinweis'; $('e-text').textContent = r.text + ' Die Eingaben sind noch gespeichert.';
-    $('btn-nachsehen').hidden = true; zeige('ergebnis'); return;
-  }
-  const fertig = r.status === 'GEDRUCKT';
-  const endgueltig = ENDGUELTIG.includes(r.status);
-  const warten = r.status === 'IN_ARBEIT' || r.status === 'NOCH_OFFEN';
-  $('e-symbol').textContent = fertig ? '✓' : (warten ? '…' : '⚠');
-  $('e-titel').textContent = fertig ? 'An den Drucker geschickt' : (r.status === 'ABGELEHNT' ? 'Nicht gedruckt' :
-    (warten ? 'Noch keine Rückmeldung' : 'Bitte beachten'));
-  $('e-text').className = 'box ' + (fertig ? 'ok' : (r.status === 'ABGELEHNT' ? 'fehler' : 'hinweis'));
-  $('e-text').textContent = r.status === 'UNKLAR' ? STATUS_KURZ.UNKLAR : r.text;
-  anrufLink('e-anrufen', r.status === 'UNKLAR' || r.status === 'FEHLER' || r.status === 'ABGELEHNT');
-  // Bis zu einem endgültigen Ergebnis bleibt „Nochmal nachsehen“ (nur Status, druckt nie).
-  $('btn-nachsehen').hidden = endgueltig;
-  zeige('ergebnis');
-}
-function anrufLink(id, sichtbar) {
-  const link = $(id);
-  const nummer = String(start?.ansprechperson || '').match(/\+?\d[\d\s-]{6,}\d/)?.[0].replace(/[\s-]/g, '');
-  link.hidden = !(sichtbar && nummer);
-  if (nummer) link.href = 'tel:' + nummer;
-}
+$('btn-korrigieren').onclick = () => {
+  const o = aktuell;
+  if (!o) return;
+  if (o.id) oeffneDokument(o.dokument); else oeffneFormular(o.art);
+};
 $('btn-neu').onclick = () => ladeStart();
 
 // ---------- Start der Seite ----------
