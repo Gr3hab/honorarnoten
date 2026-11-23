@@ -63,6 +63,11 @@
   .liste li.fehler { border:2px solid var(--rot); background:#fde8e8; }
   .liste li.hinweis { border:2px solid #d9b100; background:var(--gelb); }
   .pflicht::after { content:" *"; color:var(--rot); }
+  /* Tastatur offen: der untere Knopf-Balken würde Eingabefelder verdecken. Er kommt zurück, sobald die Tastatur zu ist. */
+  body.tastatur .unten { display:none; }
+  .liste li, .vergleich span, .box, label, .hilfe, h1, h2 { overflow-wrap:anywhere; }
+  .klein { white-space:normal; }
+  #e-text { white-space:pre-line; }
 </style>
 </head>
 <body>
@@ -150,7 +155,8 @@
     </div>
 
     <label for="f-betrag" class="pflicht">Gesamtbetrag in Euro</label>
-    <input id="f-betrag" inputmode="decimal" autocomplete="off">
+    <div class="hilfe" id="h-betrag" hidden></div>
+    <input id="f-betrag" inputmode="decimal" autocomplete="off" aria-describedby="h-betrag">
 
     <label class="pflicht">Zahlung</label>
     <div class="kacheln" id="f-zahlung" role="group"></div>
@@ -256,11 +262,63 @@ const speicher = {
 let start = null, art = 'T', geprueft = null, antworten = {}, laufend = false;
 let aktuellerBildschirm = '';
 
+// Zurück-Taste/Wischgeste des Handys: Solange nicht die Auswahl zu sehen ist, liegt genau EIN eigener Eintrag im
+// Browserverlauf. „Zurück“ führt dann innerhalb der App einen Schritt zurück, statt die App zu verlassen.
+let tieferEintrag = false, popIgnorieren = false;
+const istTief = name => !['start', 'anmelden', ''].includes(name);
+function verlaufMerken() {
+  if (tieferEintrag) return;
+  try { history.pushState({ honora: 1 }, ''); tieferEintrag = true; } catch (e) {}
+}
 function zeige(name) {
   aktuellerBildschirm = name;
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('aktiv', s.id === 's-' + name));
   window.scrollTo(0, 0);
+  if (istTief(name)) verlaufMerken();
+  else if (tieferEintrag) { tieferEintrag = false; popIgnorieren = true; try { history.back(); } catch (e) { popIgnorieren = false; } }
 }
+window.addEventListener('popstate', () => {
+  if (popIgnorieren) { popIgnorieren = false; if (istTief(aktuellerBildschirm)) verlaufMerken(); return; }
+  tieferEintrag = false;
+  const s = aktuellerBildschirm;
+  if (s === 'kontrolle') zeige('formular');
+  else if (s === 'dokument-kontrolle') zeige('dokument');
+  else if (s === 'warten') verlaufMerken();           // Senden läuft: nicht unterbrechen
+  else if (istTief(s)) ladeStart();                   // Formular, Dokument, Ergebnis -> Auswahl (Eingaben bleiben)
+});
+
+// Tastatur offen? (Android verkleinert dann den sichtbaren Bereich.) Dann den unteren Knopf-Balken ausblenden.
+let hoechsteHoehe = window.innerHeight;
+function tastaturPruefen() {
+  const vv = window.visualViewport;
+  const h = vv ? vv.height : window.innerHeight;
+  hoechsteHoehe = Math.max(hoechsteHoehe, window.innerHeight, h);
+  const feld = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  document.body.classList.toggle('tastatur', h < hoechsteHoehe * 0.75 && !!feld);
+}
+if (window.visualViewport) window.visualViewport.addEventListener('resize', tastaturPruefen);
+window.addEventListener('resize', tastaturPruefen);
+document.addEventListener('focusin', () => setTimeout(tastaturPruefen, 50));
+document.addEventListener('focusout', () => setTimeout(tastaturPruefen, 50));
+window.addEventListener('orientationchange', () => { hoechsteHoehe = 0; setTimeout(tastaturPruefen, 300); });
+
+const p2 = n => String(n).padStart(2, '0');
+function heuteText() { const d = new Date(); return `${p2(d.getDate())}.${p2(d.getMonth() + 1)}.${d.getFullYear()}`; }
+// Handy-Zifferntastaturen haben oft ein Komma statt eines Punkts: „3,11“ ist dann der 3. November.
+function datumKomma(t) { return /^\d{1,2},\d{1,2}(,(\d{2}|\d{4}))?,?$/.test(t) ? t.replace(/,/g, '.') : t; }
+function termineVereinheitlichen(text) {
+  return String(text || '').split('\n').map(z => z.trim().split(/([\s;]+)/).map(datumKomma).join('')).join('\n').trim();
+}
+function termineZaehlen(text) {
+  return termineVereinheitlichen(text).replace(/(\d)\.\s+(?=\d)/g, '$1.').split(/[\s,;]+/)
+    .filter(t => /^\d{1,2}[./-]\d{1,2}/.test(t)).length;
+}
+const zahl = t => { const s = String(t || '').trim().replace(/[€\s]/g, ''); if (!s) return NaN;
+  const n = Number(/,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,(?=\d{3}\b)/g, '').replace(',', '.')); return n; };
+const euroText = n => (Math.round(n * 100) % 100 ? n.toFixed(2).replace('.', ',') : String(Math.round(n)));
+const euroLang = n => '€ ' + n.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+const ansprechName = () => String(start?.ansprechperson || 'Lukas').split(/[\s(]/)[0] || 'Lukas';
+const namenErsetzen = t => String(t || '').replace(/\bChristian\b/g, ansprechName());
 function meldung(ziel, text, klasse, scrollen = true) {
   const el = $(ziel); el.textContent = '';
   if (!text) return;
@@ -302,12 +360,17 @@ const KEIN_NETZ = 'Gerade keine Verbindung. Sobald das Internet wieder da ist, k
 // ---------- Anmelden ----------
 $('pw-zeigen').onclick = () => { const p = $('passwort'); p.type = p.type === 'password' ? 'text' : 'password'; $('pw-zeigen').textContent = p.type === 'password' ? 'Passwort anzeigen' : 'Passwort verbergen'; };
 $('btn-anmelden').onclick = async () => {
-  const pw = $('passwort').value;
+  const pw = $('passwort').value.trim();
   if (!pw) return meldung('anmelden-meldung', 'Bitte das Passwort eintippen.');
   $('btn-anmelden').disabled = true; $('btn-anmelden').textContent = 'Wird geprüft …';
   try {
-    const r = await api('anmelden', { passwort: pw, geraet: navigator.userAgent.slice(0, 80) });
-    if (r.ok) { speicher.set('token', r.token); $('passwort').value = ''; await ladeStart(); }
+    const geraet = navigator.userAgent.slice(0, 80);
+    let r = await api('anmelden', { passwort: pw, geraet });
+    // Handy-Tastaturen schreiben gern den ersten Buchstaben groß, setzen Leerzeichen oder lange Striche.
+    // Das Passwort vom Zettel hat nur Kleinbuchstaben, Ziffern und Bindestriche: dann so noch einmal versuchen.
+    const einfach = pw.toLowerCase().replace(/\s+/g, '').replace(/[‐‑‒–—―_]/g, '-');
+    if (!r.ok && einfach !== pw) r = await api('anmelden', { passwort: einfach, geraet });
+    if (r.ok) { speicher.set('token', r.token); $('passwort').value = ''; meldung('anmelden-meldung', ''); await ladeStart(); }
     else meldung('anmelden-meldung', r.fehler);
   } catch (e) { meldung('anmelden-meldung', e.message === 'nicht eingerichtet' ? 'Die Seite ist noch nicht fertig eingerichtet (Adresse fehlt).' : KEIN_NETZ); }
   $('btn-anmelden').disabled = false; $('btn-anmelden').textContent = 'Anmelden';
@@ -323,7 +386,13 @@ $('btn-abmelden').onclick = async () => {
 };
 
 // ---------- Start ----------
-let startAnfrage = null;
+let startAnfrage = null, startZeit = 0;
+// Die App kann tagelang im Hintergrund offen bleiben: dann Datum und nächste Nummer frisch holen.
+const startVeraltet = () => !start || Date.now() - startZeit > 10 * 60 * 1000;
+async function startFrisch() {
+  if (startVeraltet()) { try { await aktualisiereStart(); } catch (e) {} }
+  return !!start;
+}
 function ladeStart() {
   zeige('start');
   $('andere-leistungen').open = false;
@@ -345,7 +414,7 @@ async function holeStart() {
   try {
     const r = await api('start', {});
     if (!r.ok) throw new Error('netz');
-    start = r;
+    start = r; startZeit = Date.now();
     meldung('start-meldung', '');
     $('weitere-dokumente').hidden = !r.weitereDokumente;
     const weitere = $('weitere-leistungen');
@@ -382,7 +451,9 @@ function zeigeLetzte() {
     const li = document.createElement('li');
     li.append(document.createTextNode(x.nummer ? x.nummer + ' · ' + x.patient : x.patient));
     const s = document.createElement('small');
-    s.textContent = [x.datum, x.status].filter(Boolean).join(' · ');
+    const status = /^unklar/i.test(x.status || '') ? 'wird noch geprüft – bitte nicht nochmal senden'
+      : /^Fehler/i.test(x.status || '') ? ansprechName() + ' kümmert sich darum' : x.status;
+    s.textContent = [x.datum, status].filter(Boolean).join(' · ');
     li.appendChild(s);
     ul.appendChild(li);
   }
@@ -407,9 +478,9 @@ function offeneDokumente() {
 }
 
 function dokumentMerken(o) {
-  const { id, zeit, dokument, entwurfZeit, status } = o;
+  const { id, zeit, dokument, entwurfZeit, status, versuche } = o;
   const liste = offeneDokumente().filter(e => e.id !== id);
-  liste.push({ id, zeit, dokument, entwurfZeit, status });
+  liste.push({ id, zeit, dokument, entwurfZeit, status, versuche: versuche || 0 });
   const fertig = liste.filter(e => e.status === 'GEDRUCKT').sort((a, b) => b.zeit - a.zeit);
   speicher.set('dokumentOffen', [...liste.filter(e => e.status !== 'GEDRUCKT'), ...fertig.slice(0, 4)]);
 }
@@ -480,8 +551,10 @@ $('dokument-formular').onsubmit = async e => {
       nummerVorschlagKnopf('dokument-meldung', r.fehler, 'd-nummer', () => submit.click());
       return;
     }
+    const nummerFeld = $('d-nummer');
+    const nummerAuto = !nummerFeld || !nummerFeld.value.trim() || nummerFeld.value.trim() === String(start.vorschlag.nummer);
     if (r.nummer) felder.nummer = r.nummer;
-    dokumentEntwurf = { art, felder };
+    dokumentEntwurf = { art, felder, nummerAuto };
     dokumentAnfrage = neueId();
     $('dokument-kontrolltitel').textContent = r.titel + ' prüfen';
     const vergleich = $('dokument-kontrollzeilen');
@@ -508,6 +581,7 @@ $('dokument-drucken').onclick = async () => {
   const schluessel = 'entwurf_d_' + art;
   if (!speicher.get(schluessel)) speicher.set(schluessel, felder);
   const o = { id: dokumentAnfrage, dokument: art, zeit: Date.now(), entwurfZeit: speicher.zeit(schluessel) };
+  sendeMerken(o.id, { art, felder, anfrageId: o.id }, dokumentEntwurf.nummerAuto);
   dokumentMerken(o);
   drucktGerade.add(o.id);
   zeigenBeimSenden('Das Dokument');
@@ -515,9 +589,13 @@ $('dokument-drucken').onclick = async () => {
     const r = await api('dokumentSenden', { art, felder, anfrageId: o.id });
     if (!r.ok && r.vorpruefung) {
       dokumentAustragen(o.id);
+      sendeWeg(o.id);
       zeige('dokument');
       meldung('dokument-meldung', r.fehler);
       nummerVorschlagKnopf('dokument-meldung', r.fehler, 'd-nummer', () => $('dokument-formular').requestSubmit());
+    } else if (r.ok && r.status === 'FEHLER') {
+      zeigeErgebnis(o);                                // nichts gedruckt: die App versucht es gleich selbst noch einmal
+      planeNachsehen(2000);
     } else {
       behandleStatus(o, r);
       zeigeErgebnis(o);
@@ -566,6 +644,7 @@ function kacheln(id, werte, feld) {
       if (feld === 'leistung') {
         zeigeLeistung();
         $('f-leistung-auswahl').open = false;
+        betragRechnen();
       }
       merkeEntwurf();
     };
@@ -575,15 +654,40 @@ function kacheln(id, werte, feld) {
 function werte() {
   const f = {};
   FELDER[art].forEach(k => { f[k] = (k === 'leistung' || k === 'zahlung') ? auswahl[k] : $('f-' + k).value.trim(); });
+  if (f.termine) f.termine = termineVereinheitlichen(f.termine);
+  if (f.termin) f.termin = datumKomma(f.termin.replace(/\s+/g, ''));
+  if (f.rechnungsdatum) f.rechnungsdatum = datumKomma(f.rechnungsdatum.replace(/\s+/g, ''));
   return f;
 }
 function merkeEntwurf() {
   if ($('s-formular').classList.contains('aktiv')) {
-    speicher.set('entwurf_' + art, { ...werte(), nummerAutomatisch });
+    speicher.set('entwurf_' + art, { ...werte(), nummerAutomatisch, betragAutomatisch, rechnungsdatumAutomatisch });
   }
 }
-function oeffneFormular(a, leistung) {
+let betragAutomatisch = true;
+// Preis pro Termin je Leistung (aus der letzten gedruckten Honorarnote). Keine Patientendaten.
+const preisFuer = leistung => { const p = (speicher.get('preise') || {})[leistung]; return p > 0 ? p : 0; };
+function preisMerken(leistung, betrag, anzahl) {
+  const b = zahl(betrag);
+  if (!leistung || !(anzahl > 0) || !(b > 0)) return;
+  const p = speicher.get('preise') || {};
+  p[leistung] = Math.round(b / anzahl * 100) / 100;
+  speicher.set('preise', p);
+}
+function betragRechnen() {
+  if (art !== 'T') { $('h-betrag').hidden = true; return; }
+  const preis = preisFuer(auswahl.leistung), n = termineZaehlen($('f-termine').value);
+  if (betragAutomatisch && preis && n) $('f-betrag').value = euroText(preis * n);
+  if (betragAutomatisch && preis && !n) $('f-betrag').value = '';
+  const h = $('h-betrag');
+  h.hidden = !preis;
+  if (preis) h.textContent = n ? `${n} ${n === 1 ? 'Termin' : 'Termine'} × ${euroLang(preis)} = ${euroLang(preis * n)}` +
+    (betragAutomatisch ? '. Wird von selbst ausgerechnet; zum Ändern einfach überschreiben.' : '')
+    : `Ein Termin kostet ${euroLang(preis)}. Der Betrag wird ausgerechnet, sobald die Termine eingetragen sind.`;
+}
+async function oeffneFormular(a, leistung) {
   if (!start) return ladeStart();
+  if (startVeraltet()) { await startFrisch(); }
   const entwurf = speicher.get('entwurf_' + a);
   const offen = entwurf && offeneLesen().find(o => o.art === a && !endgueltig(o) &&
     o.entwurfZeit === speicher.zeit('entwurf_' + a));
@@ -593,16 +697,20 @@ function oeffneFormular(a, leistung) {
   $('l-diagnose').textContent = a === 'T' ? 'Diagnose' : 'Diagnose (falls schon bekannt)';
   $('l-diagnose').classList.toggle('pflicht', a === 'T');
   const zuletzt = speicher.get('zuletzt_' + a) || {};
-  const betragVorschlag = leistung && leistung !== zuletzt.leistung ? '' : zuletzt.betrag || '';
+  // Therapie: KEIN alter Gesamtbetrag (der passt nur bei gleich vielen Terminen) – er wird aus Preis × Termine gerechnet.
+  const betragVorschlag = a === 'E' ? (zuletzt.betrag || '') : '';
   const basis = entwurf || { betrag: betragVorschlag, leistung: zuletzt.leistung || '', zahlung: zuletzt.zahlung || '' };
   ['patient', 'versnr', 'adresse', 'diagnose', 'termine', 'termin', 'betrag', 'rechnungsdatum', 'nummer'].forEach(k => { $('f-' + k).value = basis[k] || ''; });
-  // Mit Jahreszahl vorbelegt: dann ist das Jahr nie zweifelhaft.
-  if (!$('f-rechnungsdatum').value) $('f-rechnungsdatum').value = start.heute;
+  betragAutomatisch = a === 'T' && (!entwurf || (entwurf.betragAutomatisch !== undefined ? !!entwurf.betragAutomatisch : !entwurf.betrag));
+  // Mit Jahreszahl vorbelegt: dann ist das Jahr nie zweifelhaft. Ein alter Entwurf von einem früheren Tag bekommt das heutige Datum.
+  const heute = heuteText();
+  if (!$('f-rechnungsdatum').value || (entwurf && entwurf.rechnungsdatumAutomatisch !== false && $('f-rechnungsdatum').value !== heute)) $('f-rechnungsdatum').value = heute;
+  rechnungsdatumAutomatisch = $('f-rechnungsdatum').value === heute;
   $('rechnungsdatum-auswahl').open = false;
   $('termin-kalender').open = false;
   $('f-kalender').value = '';
   zeigeRechnungsdatum();
-  if (a === 'E' && !$('f-termin').value) $('f-termin').value = start.heute;
+  if (a === 'E' && !$('f-termin').value) $('f-termin').value = heute;
   const nummer = $('f-nummer');
   const vorschlag = String(start.vorschlag.nummer);
   nummerAutomatisch = !nummer.value || (entwurf?.nummerAutomatisch ?? (nummer.value === vorschlag));
@@ -612,24 +720,29 @@ function oeffneFormular(a, leistung) {
   zeigeLeistung();
   kacheln('f-leistung', start.leistungen, 'leistung');
   kacheln('f-zahlung', start.zahlungen, 'zahlung');
-  meldung('f-meldung', entwurf ? 'Die Eingaben vom letzten Mal sind wieder da. Zum Neubeginnen ganz unten „Alles leeren“ tippen.' : '', 'hinweis');
+  betragRechnen();
+  meldung('f-meldung', entwurf ? 'Die Eingaben vom letzten Mal sind wieder da. Zum Neubeginnen ganz unten „Alles leeren“ tippen.' : '', 'hinweis', false);
   zeige('formular');
 }
+let rechnungsdatumAutomatisch = true;
 $('f-nummer').addEventListener('input', () => { nummerAutomatisch = !$('f-nummer').value.trim(); });
-$('f-rechnungsdatum').addEventListener('input', zeigeRechnungsdatum);
+$('f-rechnungsdatum').addEventListener('input', () => { rechnungsdatumAutomatisch = false; zeigeRechnungsdatum(); });
+$('f-betrag').addEventListener('input', () => { betragAutomatisch = !$('f-betrag').value.trim(); betragRechnen(); });
+$('f-termine').addEventListener('input', betragRechnen);
 document.querySelectorAll('#s-formular input, #s-formular textarea').forEach(el => el.addEventListener('input', merkeEntwurf));
 function terminHinzufuegen(datum) {
   const t = $('f-termine');
   const eingabe = t.value.trim().replace(/[,;\s]+$/, '');
-  const vereinheitlicht = wert => wert.split('.').filter(Boolean).map(Number).join('.');
+  const vereinheitlicht = wert => wert.split('.').filter(Boolean).slice(0, 2).map(Number).join('.');
   if (auswahl.leistung.startsWith('Begutachtung') || !eingabe) t.value = datum;
   else {
     const liste = eingabe.split(/[,;\s]+/);
     if (!liste.some(termin => vereinheitlicht(termin) === vereinheitlicht(datum))) t.value = eingabe + '\n' + datum;
   }
+  betragRechnen();
   merkeEntwurf();
 }
-$('btn-heute').onclick = () => terminHinzufuegen(start.heute);
+$('btn-heute').onclick = () => terminHinzufuegen(heuteText());
 $('btn-termin').onclick = () => {
   const kalender = $('f-kalender');
   if (!kalender.value) return kalender.focus();
@@ -666,7 +779,7 @@ async function pruefen() {
       zeige('formular');
       formularFehler(r);
     } else {
-      geprueft = { felder: Object.assign({}, f, { nummer: String(r.nummer) }), antwort: r, anfrageId: neueId() };
+      geprueft = { felder: Object.assign({}, f, { nummer: String(r.nummer) }), antwort: r, anfrageId: neueId(), nummerAuto: nummerAutomatisch };
       antworten = {};
       zeigeKontrolle();
     }
@@ -709,7 +822,16 @@ function zeigeKontrolle() {
     const s = document.createElement('span'); s.textContent = text; d.appendChild(b); d.appendChild(s); z.appendChild(d);
   });
   const h = $('k-hinweise'); h.textContent = '';
-  r.hinweise.forEach(t => { const d = document.createElement('div'); d.className = 'box hinweis'; d.textContent = t; h.appendChild(d); });
+  const hinweise = r.hinweise.map(namenErsetzen);
+  // Betrag gegen den üblichen Preis prüfen (nur ein Hinweis, kein Hindernis).
+  const n = Number((r.zeilen.find(z => /^Termine \(\d+\)/.test(z[0])) || [''])[0].replace(/\D/g, '')) || 0;
+  const preis = art === 'T' ? preisFuer(geprueft.felder.leistung) : 0;
+  const betrag = zahl(geprueft.felder.betrag);
+  if (preis && n && Math.abs(betrag - preis * n) > 0.005) {
+    hinweise.unshift(`Bitte den Betrag prüfen: Sonst kostet ein Termin ${euroLang(preis)}. ${n} ${n === 1 ? 'Termin wäre' : 'Termine wären'} ${euroLang(preis * n)}, eingetragen sind ${euroLang(betrag)}.`);
+  }
+  geprueft.anzahl = n;
+  hinweise.forEach(t => { const d = document.createElement('div'); d.className = 'box hinweis'; d.textContent = t; h.appendChild(d); });
   const q = $('k-frage'); q.textContent = '';
   const frageOffen = r.frage && !antworten.luecke;
   if (frageOffen) {
@@ -767,17 +889,61 @@ const auftragstitel = o => o.id ? (DOKUMENTE[o.dokument]?.titel || 'Weiteres Dok
 const vermerk = {
   GEDRUCKT: 'Zwei Kopien an den Drucker geschickt.',
   ABGELEHNT: 'Die Honorarnote wurde nicht gedruckt.',
-  UNBEKANNT: 'Der Auftrag ist nicht angekommen.',
+  UNBEKANNT: 'Der Auftrag ist nicht angekommen. Bitte „Eingaben ansehen“ tippen und nochmal drucken.',
   FEHLER: 'Die Honorarnote ist gespeichert. Ein neuer Versuch läuft automatisch.',
-  BEENDET: 'Die Honorarnote ist gespeichert. Der Druck konnte nicht abgeschlossen werden.',
-  UNKLAR: 'Die App prüft weiter. Wenn schon zwei Kopien am Drucker liegen, ist für dich alles erledigt.',
+  BEENDET: 'Die Honorarnote ist gespeichert, der Druck ist aber nicht fertig geworden. NAME bekommt automatisch eine Nachricht und kümmert sich darum. Du musst nichts tun und bitte nicht nochmal senden.',
+  UNKLAR: 'Die App prüft weiter. Wenn schon zwei Kopien am Drucker liegen, ist für dich alles erledigt. Bitte nicht nochmal senden.',
   IN_ARBEIT: 'Dein Auftrag wird bearbeitet. Du kannst inzwischen zur Auswahl zurück.',
-  NOCH_OFFEN: 'Die App prüft automatisch, ob dein Auftrag angekommen ist.'
+  NOCH_OFFEN: 'Du musst nichts tun. Die App schickt den Auftrag von selbst, sobald die Verbindung wieder da ist – auch wenn du sie zwischendurch schließt und später wieder öffnest.'
 };
+
+// Gesendete, aber noch nicht sicher bei Google angekommene Aufträge (mit Inhalt, damit die App sie selbst
+// nachschicken kann). Gelöscht, sobald Google den Auftrag bestätigt oder er erledigt ist; spätestens nach 3 Tagen.
+const SENDE_MAX_MS = 3 * 24 * 3600 * 1000;
+function sendeMerken(id, daten, nummerAuto) { speicher.set('sende_' + id, { zeit: Date.now(), daten, nummerAuto: !!nummerAuto }); }
+function sendeLesen(id) { const s = speicher.get('sende_' + id); return s && s.daten && Date.now() - s.zeit < SENDE_MAX_MS ? s : null; }
+function sendeWeg(id) { speicher.weg('sende_' + id); }
+function sendeAufraeumen() {
+  try {
+    Object.keys(localStorage).filter(k => k.indexOf('hn_sende_') === 0).forEach(k => {
+      const id = k.slice('hn_sende_'.length);
+      const bekannt = [...offeneLesen(), ...offeneDokumente()].some(o => idVon(o) === id && !endgueltig(o));
+      if (!bekannt || !sendeLesen(id)) localStorage.removeItem(k);
+    });
+  } catch (e) {}
+}
+const KEINE_SPUR = ['NOCH_OFFEN', 'UNBEKANNT'];
+async function nochmalSenden(o, s) {
+  const id = idVon(o);
+  if (drucktGerade.has(id)) return;
+  drucktGerade.add(id);
+  try {
+    const daten = JSON.parse(JSON.stringify(s.daten));
+    if (s.nummerAuto) { daten.felder.nummer = ''; daten.nummerVorgeschlagen = true; } // inzwischen vergeben? dann die nächste freie
+    const r = await api(o.id ? 'dokumentSenden' : 'senden', daten);
+    if (!r.ok && r.nichtGespeichert) return;          // Google noch nicht bereit: beim nächsten Nachsehen wieder
+    if (!r.ok && (r.vorpruefung || r.frage)) {
+      sendeWeg(id);
+      // Eingaben wieder bereitlegen, damit „Eingaben ansehen“ sie zeigt.
+      const schluessel = o.id ? 'entwurf_d_' + o.dokument : 'entwurf_' + o.art;
+      speicher.set(schluessel, o.id ? s.daten.felder : { ...s.daten.felder, nummer: '', nummerAutomatisch: true, betragAutomatisch: false });
+      o.entwurfZeit = speicher.zeit(schluessel);
+      o.status = 'ABGELEHNT';
+      o.antwort = { ok: true, status: 'ABGELEHNT', text: 'Nicht gedruckt: ' + (r.frage ? 'Die Rechnungsnummer passt nicht mehr.' : r.fehler) +
+        ' Bitte „Eingaben ansehen“ tippen, kurz kontrollieren und nochmal drucken.' };
+      if (o.id) dokumentMerken(o); else offenMerken(o);
+      return;
+    }
+    behandleStatus(o, r);
+  } catch (e) {
+    // keine Verbindung: beim nächsten Nachsehen wieder
+  } finally { drucktGerade.delete(id); }
+}
 
 function behandleStatus(o, r) {
   if (!r?.ok || !r.status) return;
   const id = idVon(o);
+  if (!KEINE_SPUR.includes(r.status) || r.gespeichert) sendeWeg(id); // Google hat den Auftrag
   if (o.id && r.status === 'UNBEKANNT' && Date.now() - o.zeit < 600000) {
     o.status = 'NOCH_OFFEN';
   } else {
@@ -790,7 +956,10 @@ function behandleStatus(o, r) {
     if (o.id) dokumentMerken(o); else offenWeg(id);
     if (!o.id) {
       const zuletzt = speicher.get('entwurf_z_' + id);
-      if (zuletzt) speicher.set('zuletzt_' + o.art, zuletzt);
+      if (zuletzt) {
+        speicher.set('zuletzt_' + o.art, { betrag: zuletzt.betrag, leistung: zuletzt.leistung, zahlung: zuletzt.zahlung });
+        if (o.art === 'T') preisMerken(zuletzt.leistung, zuletzt.betrag, zuletzt.anzahl);
+      }
     }
     const schluessel = entwurfVon(o);
     if (o.entwurfZeit && speicher.zeit(schluessel) === o.entwurfZeit) speicher.weg(schluessel);
@@ -802,12 +971,12 @@ function behandleStatus(o, r) {
 
 const entwurfVon = o => o.id ? 'entwurf_d_' + o.dokument : 'entwurf_' + o.art;
 function statusText(o) {
-  if (o.id && o.status === 'FEHLER') return 'Das Dokument konnte nicht erstellt werden.';
+  if (o.id && o.status === 'FEHLER') return 'Das Dokument konnte nicht erstellt werden. Es wurde nichts gedruckt. Bitte „Eingaben ansehen“ tippen und nochmal drucken.';
   if (o.status === 'FEHLER' && o.antwort?.test) return 'Die Test-Honorarnote konnte nicht gedruckt werden.';
   if (o.status === 'ABGELEHNT' && o.antwort?.test) return 'Der Testdruck war nicht freigegeben.';
   if (o.status === 'ABGELEHNT' && o.antwort?.text) return o.antwort.text;
   if (o.status === 'GEDRUCKT' && o.antwort?.seiten > 1) return vermerk.GEDRUCKT + ' Jede Kopie hat ' + o.antwort.seiten + ' Seiten.';
-  return vermerk[o.status] || vermerk.NOCH_OFFEN;
+  return (vermerk[o.status] || vermerk.NOCH_OFFEN).replace('NAME', ansprechName());
 }
 
 function zeigeOffene() {
@@ -886,8 +1055,23 @@ async function leseStatus(o) {
   try {
     const r = await api(o.id ? 'dokumentStatus' : 'status', { anfrageId: id, alterMs: Date.now() - o.zeit });
     if (!r.ok) return;
-    behandleStatus(o, r);
-    if (aktuellerBildschirm === 'ergebnis' && aktuell && idVon(aktuell) === id) zeigeErgebnis(o, false);
+    const s = sendeLesen(id);
+    if (s && KEINE_SPUR.includes(r.status) && !r.geklaert && !o.unklar) {
+      await nochmalSenden(o, s);                       // nie bei Google angekommen: selbst nachschicken
+    } else if (s && o.id && r.status === 'FEHLER' && (o.versuche || 0) < 2) {
+      // Weiteres Dokument konnte nicht erstellt werden (dann wurde sicher nichts gedruckt): mit neuer Nummer neu versuchen.
+      const neu = neueId();
+      dokumentAustragen(id); sendeWeg(id);
+      const sieht = aktuell && idVon(aktuell) === id;
+      o.versuche = (o.versuche || 0) + 1; o.id = neu; o.status = '';
+      if (sieht) aktuell = o;
+      s.daten.anfrageId = neu; sendeMerken(neu, s.daten, s.nummerAuto);
+      dokumentMerken(o);
+      await nochmalSenden(o, sendeLesen(neu));
+    } else {
+      behandleStatus(o, r);
+    }
+    if (aktuellerBildschirm === 'ergebnis' && aktuell && (idVon(aktuell) === id || idVon(aktuell) === idVon(o))) zeigeErgebnis(o, false);
     if (aktuellerBildschirm === 'start') {
       zeigeOffene();
       if (o.status === 'GEDRUCKT') {
@@ -917,7 +1101,10 @@ async function senden() {
   if (!speicher.get('entwurf_' + art)) merkeSendeEntwurf(f);
   const o = { anfrageId: geprueft.anfrageId, art, zeit: Date.now(), entwurfZeit: speicher.zeit('entwurf_' + art) };
   const daten = { art, felder: f, anfrageId: o.anfrageId, antworten, nummerVorgeschlagen: false };
-  speicher.set('entwurf_z_' + o.anfrageId, { betrag: f.betrag, leistung: f.leistung, zahlung: f.zahlung });
+  speicher.set('entwurf_z_' + o.anfrageId, { betrag: f.betrag, leistung: f.leistung, zahlung: f.zahlung, anzahl: geprueft.anzahl || 0 });
+  // Bis Google den Auftrag sicher hat, bleibt er auf dem Handy. Bricht die Verbindung ab, schickt die App ihn
+  // später SELBST noch einmal – mit derselben Auftragsnummer, darum druckt Google ihn nie doppelt.
+  sendeMerken(o.anfrageId, daten, geprueft.nummerAuto);
   offenMerken(o);
   drucktGerade.add(o.anfrageId);
   zeigenBeimSenden('Die Honorarnote');
@@ -929,23 +1116,23 @@ async function senden() {
       await new Promise(resolve => setTimeout(resolve, pause));
       r = await api('senden', daten);
     }
-    if (!r.ok && (r.vorpruefung || r.frage || r.nichtGespeichert)) {
+    if (!r.ok && r.nichtGespeichert) {
+      o.status = 'NOCH_OFFEN'; offenMerken(o);         // die App versucht es im Hintergrund weiter
+      zeigeErgebnis(o);
+    } else if (!r.ok && (r.vorpruefung || r.frage)) {
       offenWeg(o.anfrageId);
       speicher.weg('entwurf_z_' + o.anfrageId);
+      sendeWeg(o.anfrageId);
       if (r.frage) {
         geprueft.antwort.frage = r.frage;
         antworten = {};
         zeigeKontrolle();
-      } else if (r.nichtGespeichert) {
-        zeigeKontrolle();
-        const d = document.createElement('div');
-        d.className = 'box hinweis';
-        d.textContent = 'Die Verbindung funktioniert noch nicht. Deine Eingaben sind da. Du kannst den Druck gleich noch einmal versuchen.';
-        $('k-hinweise').prepend(d);
       } else {
         zeige('formular');
         formularFehler(r);
       }
+    } else if (!r.ok) {
+      zeigeErgebnis(o);                                // unklar: die App fragt im Hintergrund weiter nach
     } else {
       behandleStatus(o, r);
       zeigeErgebnis(o);
@@ -972,7 +1159,8 @@ function zeigeErgebnis(o, wechseln = true) {
   $('e-titel').textContent = titel;
   $('e-text').className = 'box ' + (fertig ? 'ok' : (fehler ? 'fehler' : 'hinweis'));
   const nummer = o.antwort?.nummer;
-  const text = (nummer ? nummer + ' · ' : '') + statusText(o);
+  const text = (nummer ? nummer + ' · ' : '') + statusText(o) +
+    (fertig ? '\n\nKommt nach ein paar Minuten nichts heraus: Ist der Drucker eingeschaltet und hat er Papier? Dann kommt der Druck meist von selbst.' : '');
   if ($('e-text').textContent !== text) $('e-text').textContent = text;
   const korrigieren = fehler && o.status !== 'BEENDET' && o.entwurfZeit && speicher.get(entwurfVon(o)) &&
     speicher.zeit(entwurfVon(o)) === o.entwurfZeit;
@@ -989,6 +1177,7 @@ $('btn-neu').onclick = () => ladeStart();
 // ---------- Start der Seite ----------
 // V11.8: Entwürfe früherer Versionen (dauerhaft gespeichert, mit Patientendaten) einmalig löschen.
 try { localStorage.removeItem('hn_entwurf_T'); localStorage.removeItem('hn_entwurf_E'); } catch (e) {}
+sendeAufraeumen();
 if (speicher.get('token') || API_URL === 'DEMO') ladeStart(); else zeige('anmelden');
 
 // ===================== NUR FÜR DIE VORSCHAU (API_URL = 'DEMO'): nichts wird gespeichert oder gedruckt =====================
