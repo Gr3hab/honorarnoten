@@ -1060,7 +1060,9 @@ async function leseStatus(o) {
       await nochmalSenden(o, s);                       // nie bei Google angekommen: selbst nachschicken
     } else if (s && o.id && r.status === 'FEHLER' && (o.versuche || 0) < 2) {
       // Weiteres Dokument konnte nicht erstellt werden (dann wurde sicher nichts gedruckt): mit neuer Nummer neu versuchen.
-      const neu = neueId();
+      // Die neue Nummer ergibt sich fest aus der alten: Versuchen es zwei offene Fenster gleichzeitig, schicken beide
+      // DIESELBE Nummer, und Google erstellt das Dokument nur einmal.
+      const neu = id.replace(/-w\d+$/, '') + '-w' + ((o.versuche || 0) + 1);
       dokumentAustragen(id); sendeWeg(id);
       const sieht = aktuell && idVon(aktuell) === id;
       o.versuche = (o.versuche || 0) + 1; o.id = neu; o.status = '';
